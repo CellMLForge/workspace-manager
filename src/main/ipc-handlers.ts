@@ -1,0 +1,393 @@
+/**
+ * IPC handlers for main process <-> renderer (React) communication
+ * Register all message handlers here
+ */
+import { BrowserWindow, dialog, ipcMain, shell } from "electron";
+import type { OpenDialogOptions } from "electron";
+import {
+  ArchiveProject,
+  GitHubSession,
+  ManifestEntry,
+  OperationResult,
+} from "../domain/models";
+import { archiveService } from "../services/archive";
+import { manifestService } from "../services/manifest";
+import { gitService } from "../services/git";
+import { githubService } from "../services/github";
+import { zipService } from "../services/zip";
+
+/**
+ * Archive operation handlers
+ */
+ipcMain.handle(
+  "archive:create",
+  async (event, name: string, workingDir: string, description?: string) => {
+    return archiveService.createArchive(name, workingDir, description);
+  }
+);
+
+ipcMain.handle("archive:open", async (event, workingDir: string) => {
+  return archiveService.openArchive(workingDir);
+});
+
+ipcMain.handle(
+  "archive:importFiles",
+  async (event, archive: ArchiveProject, sourceFiles: string[], overwriteExisting?: boolean) => {
+    return archiveService.importFiles(archive, sourceFiles, !!overwriteExisting);
+  }
+);
+
+ipcMain.handle("archive:listFiles", async (event, archive: ArchiveProject) => {
+  return archiveService.listFiles(archive);
+});
+
+ipcMain.handle("archive:getFileContent", async (event, filePath: string) => {
+  return archiveService.getFileContent(filePath);
+});
+
+ipcMain.handle(
+  "archive:deleteFile",
+  async (event, archive: ArchiveProject, filePath: string) => {
+    return archiveService.deleteFile(archive, filePath);
+  }
+);
+
+/**
+ * Manifest operation handlers
+ */
+ipcMain.handle("manifest:parse", async (event, manifestPath: string) => {
+  return manifestService.parseManifest(manifestPath);
+});
+
+ipcMain.handle(
+  "manifest:generate",
+  async (event, manifestPath: string, entries: ManifestEntry[]) => {
+    return manifestService.generateManifest(manifestPath, entries);
+  }
+);
+
+ipcMain.handle(
+  "manifest:upsertEntry",
+  async (event, manifestPath: string, entry: ManifestEntry) => {
+    return manifestService.upsertEntry(manifestPath, entry);
+  }
+);
+
+ipcMain.handle(
+  "manifest:deleteEntry",
+  async (event, manifestPath: string, location: string) => {
+    return manifestService.deleteEntry(manifestPath, location);
+  }
+);
+
+ipcMain.handle("manifest:validate", async (event, manifestPath: string) => {
+  return manifestService.validate(manifestPath);
+});
+
+ipcMain.handle(
+  "manifest:calculateChecksum",
+  async (event, filePath: string) => {
+    return manifestService.calculateChecksum(filePath);
+  }
+);
+
+/**
+ * Git operation handlers
+ */
+ipcMain.handle(
+  "git:initRepository",
+  async (event, workingDir: string, gitignoreRules?: string[]) => {
+    return gitService.initRepository(workingDir, gitignoreRules);
+  }
+);
+
+ipcMain.handle(
+  "git:detectChanges",
+  async (event, archive: ArchiveProject) => {
+    return gitService.detectChanges(archive);
+  }
+);
+
+ipcMain.handle("git:suggestCommitMessage", async (event, changes) => {
+  return gitService.suggestCommitMessage(changes);
+});
+
+ipcMain.handle(
+  "git:commit",
+  async (event, archive: ArchiveProject, message: string) => {
+    return gitService.commit(archive, message);
+  }
+);
+
+ipcMain.handle("git:getLog", async (event, workingDir: string, limit?: number) => {
+  return gitService.getLog(workingDir, limit);
+});
+
+ipcMain.handle("git:getCurrentBranch", async (event, workingDir: string) => {
+  return gitService.getCurrentBranch(workingDir);
+});
+
+ipcMain.handle(
+  "git:setRemote",
+  async (event, workingDir: string, name: string, url: string) => {
+    return gitService.setRemote(workingDir, name, url);
+  }
+);
+
+ipcMain.handle(
+  "git:createBranch",
+  async (event, workingDir: string, branchName: string) => {
+    return gitService.createBranch(workingDir, branchName);
+  }
+);
+
+ipcMain.handle(
+  "git:checkoutBranch",
+  async (event, workingDir: string, branchName: string) => {
+    return gitService.checkoutBranch(workingDir, branchName);
+  }
+);
+
+/**
+ * GitHub operation handlers
+ */
+ipcMain.handle("github:authenticateOAuth", async () => {
+  return githubService.authenticateOAuth();
+});
+
+ipcMain.handle("github:restoreSession", async () => {
+  return githubService.restoreSession();
+});
+
+ipcMain.handle("github:logout", async () => {
+  return githubService.logout();
+});
+
+ipcMain.handle("github:listRepositories", async (event, session: GitHubSession) => {
+  return githubService.listRepositories(session);
+});
+
+ipcMain.handle(
+  "github:createRepository",
+  async (
+    event,
+    session: GitHubSession,
+    repoName: string,
+    description?: string,
+    isPrivate?: boolean
+  ) => {
+    return githubService.createRepository(session, repoName, description, isPrivate);
+  }
+);
+
+ipcMain.handle(
+  "github:push",
+  async (event, session: GitHubSession, workingDir: string, pushContext) => {
+    return githubService.push(session, workingDir, pushContext);
+  }
+);
+
+ipcMain.handle(
+  "github:cloneRepository",
+  async (event, session: GitHubSession, repoUrl: string, localDir: string) => {
+    return githubService.cloneRepository(session, repoUrl, localDir);
+  }
+);
+
+/**
+ * Zip operation handlers
+ */
+ipcMain.handle(
+  "zip:build",
+  async (event, workingDir: string, outputPath: string, excludePaths?: string[]) => {
+    return zipService.buildZip(workingDir, outputPath, excludePaths);
+  }
+);
+
+ipcMain.handle(
+  "zip:extract",
+  async (event, zipPath: string, outputDir: string) => {
+    return zipService.extractZip(zipPath, outputDir);
+  }
+);
+
+ipcMain.handle(
+  "zip:generateBase64",
+  async (event, zipPath: string, outputPath: string) => {
+    return zipService.generateBase64(zipPath, outputPath);
+  }
+);
+
+ipcMain.handle("zip:getBase64String", async (event, zipPath: string) => {
+  return zipService.getBase64String(zipPath);
+});
+
+ipcMain.handle("zip:verify", async (event, zipPath: string) => {
+  return zipService.verifyZip(zipPath);
+});
+
+/**
+ * Native dialog handlers for better cross-platform UX
+ */
+ipcMain.handle("ui:pickDirectory", async (event, defaultPath?: string) => {
+  const parentWindow = BrowserWindow.fromWebContents(event.sender) ?? undefined;
+  const options: OpenDialogOptions = {
+    title: "Select a folder",
+    defaultPath,
+    properties: ["openDirectory", "createDirectory"],
+  };
+
+  const result = parentWindow
+    ? await dialog.showOpenDialog(parentWindow, options)
+    : await dialog.showOpenDialog(options);
+
+  if (result.canceled || result.filePaths.length === 0) {
+    return null;
+  }
+
+  return result.filePaths[0];
+});
+
+ipcMain.handle("ui:pickImportPaths", async (event, defaultPath?: string) => {
+  const parentWindow = BrowserWindow.fromWebContents(event.sender) ?? undefined;
+  const options: OpenDialogOptions = {
+    title: "Select files to import",
+    defaultPath,
+    properties: ["openFile", "multiSelections"],
+  };
+
+  const result = parentWindow
+    ? await dialog.showOpenDialog(parentWindow, options)
+    : await dialog.showOpenDialog(options);
+
+  if (result.canceled) {
+    return [];
+  }
+
+  return result.filePaths;
+});
+
+ipcMain.handle("ui:pickImportDirectory", async (event, defaultPath?: string) => {
+  const parentWindow = BrowserWindow.fromWebContents(event.sender) ?? undefined;
+  const options: OpenDialogOptions = {
+    title: "Select a folder to import",
+    defaultPath,
+    properties: ["openDirectory", "createDirectory"],
+  };
+
+  const result = parentWindow
+    ? await dialog.showOpenDialog(parentWindow, options)
+    : await dialog.showOpenDialog(options);
+
+  if (result.canceled || result.filePaths.length === 0) {
+    return null;
+  }
+
+  return result.filePaths[0];
+});
+
+ipcMain.handle("ui:pickSaveZipPath", async (event, defaultPath?: string) => {
+  const parentWindow = BrowserWindow.fromWebContents(event.sender) ?? undefined;
+  const result = parentWindow
+    ? await dialog.showSaveDialog(parentWindow, {
+        title: "Save OMEX zip archive",
+        defaultPath,
+        filters: [{ name: "Zip Archive", extensions: ["zip"] }],
+      })
+    : await dialog.showSaveDialog({
+        title: "Save OMEX zip archive",
+        defaultPath,
+        filters: [{ name: "Zip Archive", extensions: ["zip"] }],
+      });
+
+  if (result.canceled || !result.filePath) {
+    return null;
+  }
+
+  return result.filePath;
+});
+
+ipcMain.handle("ui:openExternal", async (event, url: string) => {
+  await shell.openExternal(url);
+});
+
+ipcMain.handle("ui:confirmImportOverwrite", async (event, collisionNames: string[]) => {
+  const parentWindow = BrowserWindow.fromWebContents(event.sender) ?? undefined;
+  const preview = collisionNames.slice(0, 8).join(", ");
+  const overflow = collisionNames.length > 8
+    ? ` and ${collisionNames.length - 8} more`
+    : "";
+
+  const options = {
+    type: "warning" as const,
+    buttons: ["Overwrite", "Cancel"],
+    defaultId: 0,
+    cancelId: 1,
+    noLink: true,
+    title: "Overwrite existing files?",
+    message: "Some selected files or folders already exist in this workspace.",
+    detail: `Existing item(s): ${preview}${overflow}`,
+  };
+
+  const result = parentWindow
+    ? await dialog.showMessageBox(parentWindow, options)
+    : await dialog.showMessageBox(options);
+
+  return result.response === 0;
+});
+
+ipcMain.handle("ui:selectGitHubRepository", async (event, repositoryNames: string[]) => {
+  if (!repositoryNames.length) {
+    return null;
+  }
+
+  const parentWindow = BrowserWindow.fromWebContents(event.sender) ?? undefined;
+  const cappedNames = repositoryNames.slice(0, 10);
+  const overflowCount = repositoryNames.length - cappedNames.length;
+
+  const options = {
+    type: "question" as const,
+    buttons: [...cappedNames, "Cancel"],
+    defaultId: 0,
+    cancelId: cappedNames.length,
+    noLink: true,
+    title: "Select GitHub repository",
+    message: "Choose a repository to link or clone.",
+    detail: overflowCount > 0
+      ? `Showing first ${cappedNames.length} repositories. ${overflowCount} more are not shown.`
+      : "",
+  };
+
+  const result = parentWindow
+    ? await dialog.showMessageBox(parentWindow, options)
+    : await dialog.showMessageBox(options);
+
+  if (result.response < 0 || result.response >= cappedNames.length) {
+    return null;
+  }
+
+  return result.response;
+});
+
+ipcMain.handle("ui:confirmPrivateRepository", async (event) => {
+  const parentWindow = BrowserWindow.fromWebContents(event.sender) ?? undefined;
+  const options = {
+    type: "question" as const,
+    buttons: ["Private", "Public", "Cancel"],
+    defaultId: 0,
+    cancelId: 2,
+    noLink: true,
+    title: "Repository visibility",
+    message: "Select visibility for the new GitHub repository.",
+  };
+
+  const result = parentWindow
+    ? await dialog.showMessageBox(parentWindow, options)
+    : await dialog.showMessageBox(options);
+
+  if (result.response === 2) {
+    return null;
+  }
+
+  return result.response === 0;
+});

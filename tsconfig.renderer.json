@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "noEmit": true,
+    "jsx": "preserve",
+    "types": ["vite/client"]
+  },
+  "include": ["src/renderer/**/*.ts", "src/renderer/**/*.d.ts", "src/renderer/**/*.vue"]
+}
