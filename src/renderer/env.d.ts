@@ -81,6 +81,13 @@ interface RendererApi {
     onMenuOpenArchive: (callback: () => void) => () => void;
     onMenuNewArchiveGitHub: (callback: () => void) => () => void;
     onMenuOpenArchiveGitHub: (callback: () => void) => () => void;
+    onGitHubAuthDeviceCode: (
+      callback: (details: {
+        userCode: string;
+        verificationUri: string;
+        verificationUriComplete?: string;
+      }) => void
+    ) => () => void;
   };
 }
 

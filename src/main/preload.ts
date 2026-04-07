@@ -140,5 +140,21 @@ contextBridge.exposeInMainWorld("api", {
         ipcRenderer.removeListener("menu:open-archive-github", listener);
       };
     },
+    onGitHubAuthDeviceCode: (
+      callback: (details: {
+        userCode: string;
+        verificationUri: string;
+        verificationUriComplete?: string;
+      }) => void
+    ) => {
+      const listener = (
+        _event: Electron.IpcRendererEvent,
+        details: { userCode: string; verificationUri: string; verificationUriComplete?: string }
+      ) => callback(details);
+      ipcRenderer.on("github:auth-device-code", listener);
+      return () => {
+        ipcRenderer.removeListener("github:auth-device-code", listener);
+      };
+    },
   },
 });

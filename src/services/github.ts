@@ -6,6 +6,8 @@ import fs from "fs";
 import * as path from "path";
 import * as git from "isomorphic-git";
 import http from "isomorphic-git/http/node";
+import https from "https";
+import { dialog, shell } from "electron";
 import { GitHubSession, OperationResult, PushContext } from "../domain/models";
 import { Octokit } from "@octokit/rest";
 
@@ -16,7 +18,15 @@ type GitHubStoreShape = {
 const toErrorMessage = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
 
-const GITHUB_TOKEN_ENV = "GITHUB_TOKEN";
+const GITHUB_OAUTH_CLIENT_ID_ENV = "GITHUB_OAUTH_CLIENT_ID";
+const GITHUB_OAUTH_SCOPE_ENV = "GITHUB_OAUTH_SCOPE";
+
+const DEVICE_CODE_URL = "https://github.com/login/device/code";
+const ACCESS_TOKEN_URL = "https://github.com/login/oauth/access_token";
+const DEVICE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:device_code";
+
+const delay = (milliseconds: number) =>
+  new Promise((resolve) => setTimeout(resolve, milliseconds));
 
 export class GitHubService {
   private octokit: Octokit | null = null;
@@ -29,6 +39,56 @@ export class GitHubService {
 
   private createOctokit(accessToken: string) {
     return new Octokit({ auth: accessToken });
+  }
+
+  private postGitHubOAuthForm(
+    url: string,
+    payload: Record<string, string>
+  ): Promise<Record<string, any>> {
+    return new Promise((resolve, reject) => {
+      const body = new URLSearchParams(payload).toString();
+      const requestUrl = new URL(url);
+
+      const request = https.request(
+        {
+          protocol: requestUrl.protocol,
+          hostname: requestUrl.hostname,
+          port: requestUrl.port || 443,
+          path: `${requestUrl.pathname}${requestUrl.search}`,
+          method: "POST",
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded",
+            Accept: "application/json",
+            "Content-Length": Buffer.byteLength(body),
+            "User-Agent": "omex-archive-manager",
+          },
+        },
+        (response) => {
+          let responseBody = "";
+          response.setEncoding("utf8");
+          response.on("data", (chunk) => {
+            responseBody += chunk;
+          });
+          response.on("end", () => {
+            const statusCode = response.statusCode ?? 0;
+            if (statusCode < 200 || statusCode >= 300) {
+              reject(new Error(`GitHub OAuth request failed with status ${statusCode}.`));
+              return;
+            }
+
+            try {
+              resolve(JSON.parse(responseBody));
+            } catch {
+              reject(new Error("GitHub OAuth response was not valid JSON."));
+            }
+          });
+        }
+      );
+
+      request.on("error", (error) => reject(error));
+      request.write(body);
+      request.end();
+    });
   }
 
   private async hydrateSessionFromToken(accessToken: string): Promise<GitHubSession> {
@@ -52,19 +112,125 @@ export class GitHubService {
    * Initiate OAuth flow and acquire access token
    * Opens browser for GitHub consent, waits for callback
    */
-  async authenticateOAuth(): Promise<OperationResult<GitHubSession>> {
+  async authenticateOAuth(
+    onDeviceCode?: (details: {
+      userCode: string;
+      verificationUri: string;
+      verificationUriComplete?: string;
+    }) => void
+  ): Promise<OperationResult<GitHubSession>> {
     try {
-      // MVP auth path: consume token from environment.
-      // This allows the integration to work end-to-end before full OAuth app setup.
-      const tokenFromEnv = process.env[GITHUB_TOKEN_ENV]?.trim();
-      if (!tokenFromEnv) {
+      const clientId = process.env[GITHUB_OAUTH_CLIENT_ID_ENV]?.trim();
+      if (!clientId) {
         throw new Error(
-          `GitHub token not configured. Set ${GITHUB_TOKEN_ENV} before launching the app.`
+          `GitHub OAuth client ID not configured. Set ${GITHUB_OAUTH_CLIENT_ID_ENV} before launching the app.`
         );
       }
 
-      const session = await this.hydrateSessionFromToken(tokenFromEnv);
-      return { ok: true, data: session };
+      const requestedScope =
+        process.env[GITHUB_OAUTH_SCOPE_ENV]?.trim() || "repo read:user";
+
+      const deviceAuthorization = await this.postGitHubOAuthForm(DEVICE_CODE_URL, {
+        client_id: clientId,
+        scope: requestedScope,
+      });
+
+      const deviceCode = String(deviceAuthorization.device_code ?? "").trim();
+      const userCode = String(deviceAuthorization.user_code ?? "").trim();
+      const verificationUri = String(deviceAuthorization.verification_uri ?? "").trim();
+      const verificationUriComplete = String(deviceAuthorization.verification_uri_complete ?? "").trim();
+
+      if (!deviceCode || !verificationUri) {
+        throw new Error("GitHub device authorization did not return the required fields.");
+      }
+
+      const authorizationUrl = verificationUriComplete || verificationUri;
+
+      if (onDeviceCode) {
+        onDeviceCode({
+          userCode,
+          verificationUri,
+          verificationUriComplete: verificationUriComplete || undefined,
+        });
+      }
+
+      await dialog.showMessageBox({
+        type: "info",
+        buttons: ["Continue"],
+        defaultId: 0,
+        noLink: true,
+        title: "Authorize GitHub device",
+        message: "Complete GitHub sign-in",
+        detail: [
+          `Code: ${userCode || "(not provided)"}`,
+          `Verification URL: ${verificationUri}`,
+          "",
+          "A browser window will open for authorization.",
+          "If prompted for a device code, enter the code shown above.",
+        ].join("\n"),
+      });
+
+      try {
+        await shell.openExternal(authorizationUrl);
+      } catch {
+        // If browser launch fails, continue and rely on the error text below.
+      }
+
+      const expiresInSeconds = Number(deviceAuthorization.expires_in ?? 900);
+      const expiryTimestamp = Date.now() + Math.max(expiresInSeconds, 60) * 1000;
+      let pollIntervalMs = Math.max(Number(deviceAuthorization.interval ?? 5), 5) * 1000;
+
+      while (Date.now() < expiryTimestamp) {
+        await delay(pollIntervalMs);
+
+        const tokenResponse = await this.postGitHubOAuthForm(ACCESS_TOKEN_URL, {
+          client_id: clientId,
+          device_code: deviceCode,
+          grant_type: DEVICE_GRANT_TYPE,
+        });
+
+        if (tokenResponse.error) {
+          const oauthError = String(tokenResponse.error);
+          if (oauthError === "authorization_pending") {
+            continue;
+          }
+
+          if (oauthError === "slow_down") {
+            pollIntervalMs += 5000;
+            continue;
+          }
+
+          if (oauthError === "access_denied") {
+            throw new Error("GitHub sign-in was cancelled.");
+          }
+
+          if (oauthError === "expired_token") {
+            throw new Error("GitHub sign-in expired before authorization completed.");
+          }
+
+          const description = String(tokenResponse.error_description ?? "").trim();
+          throw new Error(description || `GitHub OAuth error: ${oauthError}`);
+        }
+
+        const accessToken = String(tokenResponse.access_token ?? "").trim();
+        if (!accessToken) {
+          throw new Error("GitHub OAuth did not return an access token.");
+        }
+
+        const session = await this.hydrateSessionFromToken(accessToken);
+        const grantedScopeRaw = String(tokenResponse.scope ?? "").trim();
+        session.scope = grantedScopeRaw
+          ? grantedScopeRaw.split(/[\s,]+/).filter((entry) => entry.length > 0)
+          : [];
+
+        this.store.set("session", session);
+        return { ok: true, data: session };
+      }
+
+      throw new Error(
+        `GitHub sign-in timed out. Complete authorization at ${verificationUri} using code ${userCode}.`
+      );
+
     } catch (error) {
       return { ok: false, error: toErrorMessage(error) };
     }

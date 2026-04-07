@@ -1178,12 +1178,20 @@ let detachMenuNew: (() => void) | undefined;
 let detachMenuOpen: (() => void) | undefined;
 let detachMenuNewGitHub: (() => void) | undefined;
 let detachMenuOpenGitHub: (() => void) | undefined;
+let detachGitHubAuthDeviceCode: (() => void) | undefined;
 
 onMounted(async () => {
   detachMenuNew = window.api?.events?.onMenuNewArchive?.(handleMenuNewArchive);
   detachMenuOpen = window.api?.events?.onMenuOpenArchive?.(handleMenuOpenArchive);
   detachMenuNewGitHub = window.api?.events?.onMenuNewArchiveGitHub?.(handleMenuNewArchiveGitHub);
   detachMenuOpenGitHub = window.api?.events?.onMenuOpenArchiveGitHub?.(handleMenuOpenArchiveGitHub);
+  detachGitHubAuthDeviceCode = window.api?.events?.onGitHubAuthDeviceCode?.((details) => {
+    const verificationUrl = details.verificationUriComplete || details.verificationUri;
+    info.value = [
+      `GitHub device code: ${details.userCode}`,
+      `Authorize at: ${verificationUrl}`,
+    ].join("\n");
+  });
 
   if (!window.api?.github?.restoreSession) {
     return;
@@ -1214,6 +1222,7 @@ onBeforeUnmount(() => {
   detachMenuOpen?.();
   detachMenuNewGitHub?.();
   detachMenuOpenGitHub?.();
+  detachGitHubAuthDeviceCode?.();
 });
 </script>
 
