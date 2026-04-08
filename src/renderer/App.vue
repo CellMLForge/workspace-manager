@@ -41,6 +41,7 @@ const repoBrowserItems = ref<Array<{ name: string; url: string; description?: st
 const repoBrowserLoading = ref(false);
 const repoBrowserLoadError = ref<string | null>(null);
 const repoBrowserSessionForRetry = ref<GitHubSession | null>(null);
+const githubOAuthApplicationId = ref<string | null>(null);
 let resolveRepoBrowser: ((value: string | null) => void) | null = null;
 const manifestFormatsByPath = ref<Record<string, string>>({});
 const manifestExcludedByPath = ref<Record<string, boolean>>({});
@@ -53,6 +54,8 @@ let nextLogEntryId = 1;
 
 const OPENCOR_DATA_URI_PREFIX =
   "https://opencor.ws/app/?opencor://openFile/#data:application/zip;base64,";
+const GITHUB_OAUTH_PERMISSIONS_BASE_URL =
+  "https://github.com/settings/connections/applications/";
 
 // Extend this list with additional COMBINE specs or project-specific types.
 const MANIFEST_FORMAT_CATALOG: Array<{ label: string; value: string }> = [
@@ -1236,6 +1239,21 @@ const handleGitHubLogout = async () => {
   }
 };
 
+const getGitHubPermissionsUrl = () => {
+  const appId = githubOAuthApplicationId.value?.trim();
+  if (!appId) {
+    return GITHUB_OAUTH_PERMISSIONS_BASE_URL;
+  }
+
+  return `${GITHUB_OAUTH_PERMISSIONS_BASE_URL}${encodeURIComponent(appId)}`;
+};
+
+const handleReviewPermissions = async () => {
+  const targetUrl = getGitHubPermissionsUrl();
+  await window.api?.ui?.openExternal?.(targetUrl);
+  info.value = "Opened GitHub OAuth application permissions page.";
+};
+
 let detachMenuNew: (() => void) | undefined;
 let detachMenuOpen: (() => void) | undefined;
 let detachMenuNewGitHub: (() => void) | undefined;
@@ -1265,6 +1283,12 @@ onMounted(async () => {
 
     info.value = details.message;
   });
+
+  try {
+    githubOAuthApplicationId.value = await window.api?.github?.getOAuthApplicationId?.();
+  } catch (caughtError) {
+    console.warn("Failed to resolve GitHub OAuth application id", caughtError);
+  }
 
   if (!window.api?.github?.restoreSession) {
     return;
@@ -1310,11 +1334,35 @@ onBeforeUnmount(() => {
 
       <div class="account-panel">
         <template v-if="githubSession">
-          <div class="account-chip">
-            <PAvatar :image="githubSession.avatarUrl" shape="circle" />
-            <span>{{ githubSession.username }}</span>
-          </div>
-          <PButton label="Logout" severity="secondary" :disabled="loading" @click="handleGitHubLogout" />
+          <details class="account-menu">
+            <summary class="account-menu-trigger">
+              <div class="account-chip">
+                <PAvatar :image="githubSession.avatarUrl" shape="circle" />
+                <span>{{ githubSession.username }}</span>
+                <span class="account-menu-caret" aria-hidden="true">▾</span>
+              </div>
+            </summary>
+
+            <div class="account-menu-list" role="menu" aria-label="GitHub account menu">
+              <button
+                type="button"
+                class="account-menu-item"
+                role="menuitem"
+                @click="handleReviewPermissions"
+              >
+                Review permissions
+              </button>
+              <button
+                type="button"
+                class="account-menu-item"
+                role="menuitem"
+                :disabled="loading"
+                @click="handleGitHubLogout"
+              >
+                Logout
+              </button>
+            </div>
+          </details>
         </template>
         <template v-else-if="isAuthenticating">
           <span class="auth-in-progress-label">Waiting for GitHub...</span>
@@ -1754,6 +1802,65 @@ h1 {
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.72);
   backdrop-filter: blur(8px);
+}
+
+.account-menu {
+  position: relative;
+}
+
+.account-menu > summary {
+  list-style: none;
+}
+
+.account-menu > summary::-webkit-details-marker {
+  display: none;
+}
+
+.account-menu-trigger {
+  cursor: pointer;
+  user-select: none;
+}
+
+.account-menu-caret {
+  font-size: 0.8rem;
+  opacity: 0.75;
+}
+
+.account-menu-list {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.4rem);
+  min-width: 220px;
+  border: 1px solid rgba(77, 95, 117, 0.24);
+  border-radius: 10px;
+  background: #ffffff;
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.16);
+  overflow: hidden;
+  z-index: 20;
+}
+
+.account-menu-item {
+  width: 100%;
+  border: 0;
+  border-top: 1px solid rgba(77, 95, 117, 0.16);
+  background: transparent;
+  text-align: left;
+  padding: 0.65rem 0.8rem;
+  font-size: 0.94rem;
+  cursor: pointer;
+}
+
+.account-menu-item:first-child {
+  border-top: 0;
+}
+
+.account-menu-item:hover {
+  background: #eef5ff;
+}
+
+.account-menu-item:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
 }
 
 .auth-in-progress-label {

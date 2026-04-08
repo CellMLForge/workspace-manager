@@ -72,6 +72,11 @@ export class GitHubService {
     return process.env[GITHUB_OAUTH_CLIENT_ID_ENV]?.trim() || githubAuthConfig.clientId;
   }
 
+  getOAuthApplicationId(): string | null {
+    const clientId = this.resolveOAuthClientId();
+    return clientId ? clientId : null;
+  }
+
   private storeSession(session: GitHubSession) {
     const metadata: Omit<GitHubSession, "accessToken"> = {
       username: session.username,

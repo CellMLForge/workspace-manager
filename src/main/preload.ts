@@ -65,6 +65,8 @@ contextBridge.exposeInMainWorld("api", {
       ipcRenderer.invoke("github:authenticateOAuth"),
     cancelAuth: () =>
       ipcRenderer.invoke("github:cancelAuth"),
+    getOAuthApplicationId: () =>
+      ipcRenderer.invoke("github:getOAuthApplicationId"),
     restoreSession: () =>
       ipcRenderer.invoke("github:restoreSession"),
     logout: () =>

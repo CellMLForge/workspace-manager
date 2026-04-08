@@ -161,6 +161,10 @@ ipcMain.handle("github:cancelAuth", async () => {
   githubService.cancelAuthFlow();
 });
 
+ipcMain.handle("github:getOAuthApplicationId", async () => {
+  return githubService.getOAuthApplicationId();
+});
+
 ipcMain.handle("github:restoreSession", async () => {
   return githubService.restoreSession();
 });

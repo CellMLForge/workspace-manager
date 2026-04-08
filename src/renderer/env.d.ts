@@ -34,6 +34,7 @@ interface RendererApi {
   github: {
     authenticateOAuth: () => Promise<IpcResult<import("@domain/models").GitHubSession>>;
     cancelAuth: () => Promise<void>;
+    getOAuthApplicationId: () => Promise<string | null>;
     restoreSession: () => Promise<IpcResult<import("@domain/models").GitHubSession | null>>;
     logout: () => Promise<IpcResult<void>>;
     listRepositories: (
