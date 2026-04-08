@@ -4,6 +4,8 @@ interface IpcResult<T> {
   ok: boolean;
   data?: T;
   error?: unknown;
+  /** True when the GitHub token has expired or been revoked; renderer should clear session */
+  authExpired?: boolean;
 }
 
 interface RendererApi {
@@ -31,6 +33,7 @@ interface RendererApi {
   };
   github: {
     authenticateOAuth: () => Promise<IpcResult<import("@domain/models").GitHubSession>>;
+    cancelAuth: () => Promise<void>;
     restoreSession: () => Promise<IpcResult<import("@domain/models").GitHubSession | null>>;
     logout: () => Promise<IpcResult<void>>;
     listRepositories: (
@@ -81,11 +84,14 @@ interface RendererApi {
     onMenuOpenArchive: (callback: () => void) => () => void;
     onMenuNewArchiveGitHub: (callback: () => void) => () => void;
     onMenuOpenArchiveGitHub: (callback: () => void) => () => void;
-    onGitHubAuthDeviceCode: (
+    onGitHubAuthProgress: (
       callback: (details: {
-        userCode: string;
-        verificationUri: string;
+        stage: "starting" | "device_code" | "browser_opened" | "waiting" | "success" | "error";
+        message: string;
+        userCode?: string;
+        verificationUri?: string;
         verificationUriComplete?: string;
+        scopeWarning?: string;
       }) => void
     ) => () => void;
   };

@@ -111,4 +111,6 @@ export interface OperationResult<T> {
   ok: boolean;
   data?: T;
   error?: Error | string;
+  /** Set to true when the failure is due to an expired or revoked GitHub token */
+  authExpired?: boolean;
 }

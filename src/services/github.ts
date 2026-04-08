@@ -7,12 +7,25 @@ import * as path from "path";
 import * as git from "isomorphic-git";
 import http from "isomorphic-git/http/node";
 import https from "https";
-import { dialog, shell } from "electron";
+import { dialog, safeStorage, shell } from "electron";
 import { GitHubSession, OperationResult, PushContext } from "../domain/models";
 import { Octokit } from "@octokit/rest";
+import { githubAuthConfig } from "./github-config";
 
 type GitHubStoreShape = {
-  session: GitHubSession | null;
+  sessionMetadata: Omit<GitHubSession, "accessToken"> | null;
+  encryptedAccessToken: string | null;
+  tokenStorageMode: "safeStorage" | "plain" | null;
+};
+
+type AuthProgressEvent = {
+  stage: "starting" | "device_code" | "browser_opened" | "waiting" | "success" | "error";
+  message: string;
+  userCode?: string;
+  verificationUri?: string;
+  verificationUriComplete?: string;
+  /** Populated on the "success" stage when GitHub granted fewer scopes than requested */
+  scopeWarning?: string;
 };
 
 const toErrorMessage = (error: unknown) =>
@@ -28,17 +41,90 @@ const DEVICE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:device_code";
 const delay = (milliseconds: number) =>
   new Promise((resolve) => setTimeout(resolve, milliseconds));
 
+const HTTP_REQUEST_TIMEOUT_MS = 30_000;
+
+function isGitHubAuthError(error: unknown): boolean {
+  if (typeof error === "object" && error !== null && "status" in error) {
+    const status = (error as { status: unknown }).status;
+    return status === 401 || status === 403;
+  }
+  return false;
+}
+
 export class GitHubService {
   private octokit: Octokit | null = null;
+  private _authInProgress = false;
+  private _authAbortController: { cancelled: boolean } | null = null;
   private store = new Store<GitHubStoreShape>({
     name: "omex-archive-manager",
     defaults: {
-      session: null,
+      sessionMetadata: null,
+      encryptedAccessToken: null,
+      tokenStorageMode: null,
     },
   });
 
   private createOctokit(accessToken: string) {
     return new Octokit({ auth: accessToken });
+  }
+
+  private resolveOAuthClientId() {
+    return process.env[GITHUB_OAUTH_CLIENT_ID_ENV]?.trim() || githubAuthConfig.clientId;
+  }
+
+  private storeSession(session: GitHubSession) {
+    const metadata: Omit<GitHubSession, "accessToken"> = {
+      username: session.username,
+      avatarUrl: session.avatarUrl,
+      scope: session.scope,
+      refreshToken: session.refreshToken,
+      expiresAt: session.expiresAt,
+    };
+
+    if (safeStorage.isEncryptionAvailable()) {
+      const encrypted = safeStorage.encryptString(session.accessToken).toString("base64");
+      this.store.set("sessionMetadata", metadata);
+      this.store.set("encryptedAccessToken", encrypted);
+      this.store.set("tokenStorageMode", "safeStorage");
+      return;
+    }
+
+    this.store.set("sessionMetadata", metadata);
+    this.store.set("encryptedAccessToken", session.accessToken);
+    this.store.set("tokenStorageMode", "plain");
+    console.warn(
+      "[GitHubService] OS-level encryption is unavailable. GitHub access token is stored in plain text. " +
+        "Ensure the application data directory is protected by OS file permissions."
+    );
+  }
+
+  private clearStoredSession() {
+    this.store.set("sessionMetadata", null);
+    this.store.set("encryptedAccessToken", null);
+    this.store.set("tokenStorageMode", null);
+  }
+
+  private readStoredSessionToken(): string | null {
+    const payload = this.store.get("encryptedAccessToken", null);
+    const mode = this.store.get("tokenStorageMode", null);
+
+    if (!payload || !mode) {
+      return null;
+    }
+
+    if (mode === "safeStorage") {
+      if (!safeStorage.isEncryptionAvailable()) {
+        return null;
+      }
+
+      try {
+        return safeStorage.decryptString(Buffer.from(payload, "base64"));
+      } catch {
+        return null;
+      }
+    }
+
+    return payload;
   }
 
   private postGitHubOAuthForm(
@@ -70,6 +156,7 @@ export class GitHubService {
             responseBody += chunk;
           });
           response.on("end", () => {
+            clearTimeout(requestTimer);
             const statusCode = response.statusCode ?? 0;
             if (statusCode < 200 || statusCode >= 300) {
               reject(new Error(`GitHub OAuth request failed with status ${statusCode}.`));
@@ -85,7 +172,15 @@ export class GitHubService {
         }
       );
 
-      request.on("error", (error) => reject(error));
+      let requestTimer: ReturnType<typeof setTimeout>;
+      requestTimer = setTimeout(() => {
+        request.destroy(new Error("GitHub OAuth request timed out."));
+      }, HTTP_REQUEST_TIMEOUT_MS);
+
+      request.on("error", (error) => {
+        clearTimeout(requestTimer);
+        reject(error);
+      });
       request.write(body);
       request.end();
     });
@@ -103,32 +198,36 @@ export class GitHubService {
     };
 
     this.octokit = octokit;
-    this.store.set("session", session);
-
     return session;
   }
 
   /**
-   * Initiate OAuth flow and acquire access token
-   * Opens browser for GitHub consent, waits for callback
+   * Initiate OAuth flow and acquire access token.
+   * Uses GitHub Device Flow — opens browser for user consent, polls for completion.
    */
   async authenticateOAuth(
-    onDeviceCode?: (details: {
-      userCode: string;
-      verificationUri: string;
-      verificationUriComplete?: string;
-    }) => void
+    onProgress?: (event: AuthProgressEvent) => void
   ): Promise<OperationResult<GitHubSession>> {
+    if (this._authInProgress) {
+      return { ok: false, error: "GitHub authorization is already in progress." };
+    }
+
+    const abort = { cancelled: false };
+    this._authAbortController = abort;
+    this._authInProgress = true;
+
     try {
-      const clientId = process.env[GITHUB_OAUTH_CLIENT_ID_ENV]?.trim();
+      onProgress?.({ stage: "starting", message: "Starting GitHub device authorization..." });
+
+      const clientId = this.resolveOAuthClientId();
       if (!clientId) {
         throw new Error(
-          `GitHub OAuth client ID not configured. Set ${GITHUB_OAUTH_CLIENT_ID_ENV} before launching the app.`
+          `GitHub OAuth client ID not configured. Set ${GITHUB_OAUTH_CLIENT_ID_ENV} or provide a packaged default.`
         );
       }
 
       const requestedScope =
-        process.env[GITHUB_OAUTH_SCOPE_ENV]?.trim() || "repo read:user";
+        process.env[GITHUB_OAUTH_SCOPE_ENV]?.trim() || githubAuthConfig.defaultScope;
 
       const deviceAuthorization = await this.postGitHubOAuthForm(DEVICE_CODE_URL, {
         client_id: clientId,
@@ -146,18 +245,19 @@ export class GitHubService {
 
       const authorizationUrl = verificationUriComplete || verificationUri;
 
-      if (onDeviceCode) {
-        onDeviceCode({
-          userCode,
-          verificationUri,
-          verificationUriComplete: verificationUriComplete || undefined,
-        });
-      }
+      onProgress?.({
+        stage: "device_code",
+        message: "GitHub device code received.",
+        userCode,
+        verificationUri,
+        verificationUriComplete: verificationUriComplete || undefined,
+      });
 
-      await dialog.showMessageBox({
+      const dialogResult = await dialog.showMessageBox({
         type: "info",
-        buttons: ["Continue"],
+        buttons: ["Continue", "Cancel"],
         defaultId: 0,
+        cancelId: 1,
         noLink: true,
         title: "Authorize GitHub device",
         message: "Complete GitHub sign-in",
@@ -170,18 +270,36 @@ export class GitHubService {
         ].join("\n"),
       });
 
+      if (dialogResult.response === 1 || abort.cancelled) {
+        throw new Error("GitHub sign-in was cancelled.");
+      }
+
       try {
         await shell.openExternal(authorizationUrl);
+        onProgress?.({ stage: "browser_opened", message: "Browser opened for GitHub authorization." });
       } catch {
         // If browser launch fails, continue and rely on the error text below.
+        onProgress?.({
+          stage: "browser_opened",
+          message: "Open browser manually to complete GitHub authorization.",
+        });
       }
 
       const expiresInSeconds = Number(deviceAuthorization.expires_in ?? 900);
       const expiryTimestamp = Date.now() + Math.max(expiresInSeconds, 60) * 1000;
       let pollIntervalMs = Math.max(Number(deviceAuthorization.interval ?? 5), 5) * 1000;
+      onProgress?.({ stage: "waiting", message: "Waiting for GitHub authorization confirmation..." });
 
       while (Date.now() < expiryTimestamp) {
+        if (abort.cancelled) {
+          throw new Error("GitHub sign-in was cancelled.");
+        }
+
         await delay(pollIntervalMs);
+
+        if (abort.cancelled) {
+          throw new Error("GitHub sign-in was cancelled.");
+        }
 
         const tokenResponse = await this.postGitHubOAuthForm(ACCESS_TOKEN_URL, {
           client_id: clientId,
@@ -223,16 +341,44 @@ export class GitHubService {
           ? grantedScopeRaw.split(/[\s,]+/).filter((entry) => entry.length > 0)
           : [];
 
-        this.store.set("session", session);
+        this.storeSession(session);
+
+        // Validate that all requested scopes were granted.
+        const requestedScopes = requestedScope.split(/[\s,]+/).filter((s) => s.length > 0);
+        const missingScopes = requestedScopes.filter((s) => !session.scope.includes(s));
+        const successMessage =
+          missingScopes.length > 0
+            ? `GitHub authentication complete. Note: some requested permissions were not granted: ${missingScopes.join(", ")}.`
+            : "GitHub authentication complete.";
+
+        onProgress?.({
+          stage: "success",
+          message: successMessage,
+          scopeWarning: missingScopes.length > 0 ? `Missing scopes: ${missingScopes.join(", ")}` : undefined,
+        });
         return { ok: true, data: session };
       }
 
       throw new Error(
         `GitHub sign-in timed out. Complete authorization at ${verificationUri} using code ${userCode}.`
       );
-
     } catch (error) {
-      return { ok: false, error: toErrorMessage(error) };
+      const message = toErrorMessage(error);
+      onProgress?.({ stage: "error", message });
+      return { ok: false, error: message };
+    } finally {
+      this._authInProgress = false;
+      this._authAbortController = null;
+    }
+  }
+
+  /**
+   * Cancel an in-progress device authorization flow.
+   * Has no effect if no flow is currently active.
+   */
+  cancelAuthFlow(): void {
+    if (this._authAbortController) {
+      this._authAbortController.cancelled = true;
     }
   }
 
@@ -241,17 +387,31 @@ export class GitHubService {
    */
   async restoreSession(): Promise<OperationResult<GitHubSession | null>> {
     try {
-      const session = this.store.get("session", null);
-      if (!session) {
+      const legacySession = (this.store as Store<any>).get("session", null) as GitHubSession | null;
+      if (legacySession?.accessToken) {
+        this.storeSession(legacySession);
+        (this.store as Store<any>).set("session", null);
+      }
+
+      const sessionMetadata = this.store.get("sessionMetadata", null);
+      const accessToken = this.readStoredSessionToken();
+
+      if (!sessionMetadata || !accessToken) {
         return { ok: true, data: null };
       }
+
+      const session: GitHubSession = {
+        ...sessionMetadata,
+        accessToken,
+      };
 
       try {
         this.octokit = this.createOctokit(session.accessToken);
         await this.octokit.users.getAuthenticated();
+        this.storeSession(session);
         return { ok: true, data: session };
       } catch {
-        this.store.set("session", null);
+        this.clearStoredSession();
         this.octokit = null;
         return { ok: true, data: null };
       }
@@ -261,14 +421,93 @@ export class GitHubService {
   }
 
   /**
-   * Revoke and clear stored session
+   * Revoke and clear stored session.
+   * Attempts server-side token revocation when a client secret is available via
+   * the GITHUB_OAUTH_CLIENT_SECRET environment variable.
    */
   async logout(): Promise<OperationResult<void>> {
     try {
-      this.store.set("session", null);
+      const accessToken = this.readStoredSessionToken();
+      const clientId = this.resolveOAuthClientId();
+      const clientSecret = process.env["GITHUB_OAUTH_CLIENT_SECRET"]?.trim();
+
+      if (accessToken && clientId && clientSecret) {
+        await this.revokeGitHubToken(clientId, clientSecret, accessToken).catch(() => {
+          // Server-side revocation failed; token may already be invalid or revoked.
+          // Always clear local storage regardless.
+        });
+      }
+
+      this.clearStoredSession();
       this.octokit = null;
       return { ok: true };
     } catch (error) {
+      return { ok: false, error: toErrorMessage(error) };
+    }
+  }
+
+  private revokeGitHubToken(clientId: string, clientSecret: string, accessToken: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const body = JSON.stringify({ access_token: accessToken });
+      const credentials = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
+      let timer: ReturnType<typeof setTimeout>;
+
+      const request = https.request(
+        {
+          hostname: "api.github.com",
+          port: 443,
+          path: `/applications/${encodeURIComponent(clientId)}/token`,
+          method: "DELETE",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/vnd.github+json",
+            Authorization: `Basic ${credentials}`,
+            "User-Agent": "omex-archive-manager",
+            "Content-Length": Buffer.byteLength(body),
+          },
+        },
+        (response) => {
+          clearTimeout(timer);
+          response.resume(); // consume the body to free the socket
+          const status = response.statusCode ?? 0;
+          if (status === 204 || status === 404) {
+            resolve(); // 204 = revoked, 404 = token already gone
+          } else {
+            reject(new Error(`Token revocation failed with status ${status}.`));
+          }
+        }
+      );
+
+      timer = setTimeout(() => {
+        request.destroy(new Error("Token revocation request timed out."));
+      }, HTTP_REQUEST_TIMEOUT_MS);
+
+      request.on("error", (err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+      request.write(body);
+      request.end();
+    });
+  }
+
+  /**
+   * Wraps Octokit API calls with automatic session invalidation on 401/403 errors.
+   */
+  private async withOctokit<T>(
+    accessToken: string,
+    fn: (octokit: Octokit) => Promise<T>
+  ): Promise<OperationResult<T>> {
+    try {
+      const octokit = this.createOctokit(accessToken);
+      const data = await fn(octokit);
+      return { ok: true, data };
+    } catch (error) {
+      if (isGitHubAuthError(error)) {
+        this.clearStoredSession();
+        this.octokit = null;
+        return { ok: false, error: toErrorMessage(error), authExpired: true };
+      }
       return { ok: false, error: toErrorMessage(error) };
     }
   }
@@ -281,24 +520,17 @@ export class GitHubService {
   ): Promise<
     OperationResult<{ name: string; url: string; description?: string }[]>
   > {
-    try {
-      const octokit = this.createOctokit(session.accessToken);
+    return this.withOctokit(session.accessToken, async (octokit) => {
       const repos = await octokit.paginate(octokit.repos.listForAuthenticatedUser, {
         per_page: 100,
         sort: "updated",
       });
-
-      return {
-        ok: true,
-        data: repos.map((repo) => ({
-          name: repo.full_name,
-          url: repo.clone_url,
-          description: repo.description ?? undefined,
-        })),
-      };
-    } catch (error) {
-      return { ok: false, error: toErrorMessage(error) };
-    }
+      return repos.map((repo) => ({
+        name: repo.full_name,
+        url: repo.clone_url,
+        description: repo.description ?? undefined,
+      }));
+    });
   }
 
   /**
@@ -310,19 +542,15 @@ export class GitHubService {
     description?: string,
     isPrivate: boolean = false
   ): Promise<OperationResult<string>> {
-    try {
-      const octokit = this.createOctokit(session.accessToken);
+    return this.withOctokit(session.accessToken, async (octokit) => {
       const response = await octokit.repos.createForAuthenticatedUser({
         name: repoName,
         description,
         private: isPrivate,
         auto_init: false,
       });
-
-      return { ok: true, data: response.data.clone_url };
-    } catch (error) {
-      return { ok: false, error: toErrorMessage(error) };
-    }
+      return response.data.clone_url;
+    });
   }
 
   /**
@@ -359,6 +587,7 @@ export class GitHubService {
         });
       }
 
+      let authFailed = false;
       await git.push({
         fs,
         http,
@@ -371,7 +600,21 @@ export class GitHubService {
           username: session.username || "x-access-token",
           password: session.accessToken,
         }),
+        onAuthFailure: () => {
+          authFailed = true;
+          return { cancel: true };
+        },
       });
+
+      if (authFailed) {
+        this.clearStoredSession();
+        this.octokit = null;
+        return {
+          ok: false,
+          error: "GitHub authentication expired. Please sign in again.",
+          authExpired: true,
+        };
+      }
 
       return {
         ok: true,
@@ -402,6 +645,7 @@ export class GitHubService {
         throw new Error("Target folder must be empty before cloning.");
       }
 
+      let authFailed = false;
       await git.clone({
         fs,
         http,
@@ -413,7 +657,21 @@ export class GitHubService {
           username: session.username || "x-access-token",
           password: session.accessToken,
         }),
+        onAuthFailure: () => {
+          authFailed = true;
+          return { cancel: true };
+        },
       });
+
+      if (authFailed) {
+        this.clearStoredSession();
+        this.octokit = null;
+        return {
+          ok: false,
+          error: "GitHub authentication expired. Please sign in again.",
+          authExpired: true,
+        };
+      }
 
       return { ok: true, data: dir };
     } catch (error) {
@@ -429,20 +687,13 @@ export class GitHubService {
     owner: string,
     repo: string
   ): Promise<OperationResult<{ url: string; isPrivate: boolean }>> {
-    try {
-      const octokit = this.createOctokit(session.accessToken);
+    return this.withOctokit(session.accessToken, async (octokit) => {
       const response = await octokit.repos.get({ owner, repo });
-
       return {
-        ok: true,
-        data: {
-          url: response.data.clone_url,
-          isPrivate: response.data.private,
-        },
+        url: response.data.clone_url,
+        isPrivate: response.data.private,
       };
-    } catch (error) {
-      return { ok: false, error: toErrorMessage(error) };
-    }
+    });
   }
 
   /**
@@ -451,13 +702,16 @@ export class GitHubService {
   async refreshToken(
     session: GitHubSession
   ): Promise<OperationResult<GitHubSession>> {
-    try {
-      // Token refresh depends on OAuth app configuration; validate current token for now.
-      const refreshed = await this.hydrateSessionFromToken(session.accessToken);
-      return { ok: true, data: refreshed };
-    } catch (error) {
-      return { ok: false, error: toErrorMessage(error) };
-    }
+    return this.withOctokit(session.accessToken, async (octokit) => {
+      const profile = await octokit.users.getAuthenticated();
+      const refreshed: GitHubSession = {
+        ...session,
+        username: profile.data.login,
+        avatarUrl: profile.data.avatar_url,
+      };
+      this.storeSession(refreshed);
+      return refreshed;
+    });
   }
 }
 

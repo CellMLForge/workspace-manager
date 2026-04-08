@@ -63,6 +63,8 @@ contextBridge.exposeInMainWorld("api", {
   github: {
     authenticateOAuth: () =>
       ipcRenderer.invoke("github:authenticateOAuth"),
+    cancelAuth: () =>
+      ipcRenderer.invoke("github:cancelAuth"),
     restoreSession: () =>
       ipcRenderer.invoke("github:restoreSession"),
     logout: () =>
@@ -140,20 +142,30 @@ contextBridge.exposeInMainWorld("api", {
         ipcRenderer.removeListener("menu:open-archive-github", listener);
       };
     },
-    onGitHubAuthDeviceCode: (
+    onGitHubAuthProgress: (
       callback: (details: {
-        userCode: string;
-        verificationUri: string;
+        stage: "starting" | "device_code" | "browser_opened" | "waiting" | "success" | "error";
+        message: string;
+        userCode?: string;
+        verificationUri?: string;
         verificationUriComplete?: string;
+        scopeWarning?: string;
       }) => void
     ) => {
       const listener = (
         _event: Electron.IpcRendererEvent,
-        details: { userCode: string; verificationUri: string; verificationUriComplete?: string }
+        details: {
+          stage: "starting" | "device_code" | "browser_opened" | "waiting" | "success" | "error";
+          message: string;
+          userCode?: string;
+          verificationUri?: string;
+          verificationUriComplete?: string;
+          scopeWarning?: string;
+        }
       ) => callback(details);
-      ipcRenderer.on("github:auth-device-code", listener);
+      ipcRenderer.on("github:auth-progress", listener);
       return () => {
-        ipcRenderer.removeListener("github:auth-device-code", listener);
+        ipcRenderer.removeListener("github:auth-progress", listener);
       };
     },
   },

@@ -13,6 +13,7 @@ import type {
 const currentArchive = ref<ArchiveProject | null>(null);
 const githubSession = ref<GitHubSession | null>(null);
 const loading = ref(false);
+const isAuthenticating = ref(false);
 const importing = ref(false);
 const exporting = ref(false);
 const committing = ref(false);
@@ -37,6 +38,9 @@ const showRepoBrowser = ref(false);
 const repoBrowserQuery = ref("");
 const repoBrowserOrgFilter = ref("all");
 const repoBrowserItems = ref<Array<{ name: string; url: string; description?: string; owner: string }>>([]);
+const repoBrowserLoading = ref(false);
+const repoBrowserLoadError = ref<string | null>(null);
+const repoBrowserSessionForRetry = ref<GitHubSession | null>(null);
 let resolveRepoBrowser: ((value: string | null) => void) | null = null;
 const manifestFormatsByPath = ref<Record<string, string>>({});
 const manifestExcludedByPath = ref<Record<string, boolean>>({});
@@ -160,20 +164,62 @@ const normalizeRepoOwner = (fullName: string) => {
   return fullName.slice(0, slashIndex).toLowerCase();
 };
 
-const openRepoBrowser = (
-  repositories: Array<{ name: string; url: string; description?: string }>
-): Promise<string | null> => {
-  repoBrowserItems.value = repositories.map((repo) => ({
-    ...repo,
-    owner: normalizeRepoOwner(repo.name),
-  }));
+const openRepoBrowser = (): Promise<string | null> => {
+  repoBrowserItems.value = [];
   repoBrowserQuery.value = "";
   repoBrowserOrgFilter.value = "all";
+  repoBrowserLoadError.value = null;
   showRepoBrowser.value = true;
 
   return new Promise((resolve) => {
     resolveRepoBrowser = resolve;
   });
+};
+
+const loadRepoBrowserItems = async (session: GitHubSession) => {
+  if (!window.api?.github?.listRepositories) {
+    repoBrowserLoadError.value = "GitHub repository API not available";
+    return;
+  }
+
+  repoBrowserSessionForRetry.value = session;
+  repoBrowserLoading.value = true;
+  repoBrowserLoadError.value = null;
+
+  const result = await window.api.github.listRepositories(toRaw(session)!);
+
+  if (!showRepoBrowser.value) {
+    repoBrowserLoading.value = false;
+    return;
+  }
+
+  if (!result.ok || !result.data) {
+    if (result.authExpired) {
+      handleAuthExpired();
+      cancelRepoBrowser();
+      repoBrowserLoading.value = false;
+      return;
+    }
+
+    repoBrowserLoadError.value = String(result.error ?? "Unable to load repositories.");
+    repoBrowserItems.value = [];
+    repoBrowserLoading.value = false;
+    return;
+  }
+
+  repoBrowserItems.value = result.data.map((repo) => ({
+    ...repo,
+    owner: normalizeRepoOwner(repo.name),
+  }));
+  repoBrowserLoading.value = false;
+};
+
+const retryLoadRepoBrowserItems = async () => {
+  if (!repoBrowserSessionForRetry.value) {
+    return;
+  }
+
+  await loadRepoBrowserItems(repoBrowserSessionForRetry.value);
 };
 
 const filteredRepoBrowserItems = () => {
@@ -218,6 +264,7 @@ const groupedRepoBrowserItems = () => {
 
 const chooseRepoFromBrowser = (repoUrl: string) => {
   showRepoBrowser.value = false;
+  repoBrowserLoading.value = false;
   const resolver = resolveRepoBrowser;
   resolveRepoBrowser = null;
   resolver?.(repoUrl);
@@ -225,6 +272,7 @@ const chooseRepoFromBrowser = (repoUrl: string) => {
 
 const cancelRepoBrowser = () => {
   showRepoBrowser.value = false;
+  repoBrowserLoading.value = false;
   const resolver = resolveRepoBrowser;
   resolveRepoBrowser = null;
   resolver?.(null);
@@ -246,18 +294,9 @@ const cancelRepoNamePrompt = () => {
 };
 
 const chooseGitHubRepoUrl = async (session: GitHubSession): Promise<string | null> => {
-  if (!window.api?.github?.listRepositories) {
-    error.value = "GitHub repository API not available";
-    return null;
-  }
-
-  const result = await window.api.github.listRepositories(toRaw(session)!);
-  if (!result.ok || !result.data || result.data.length === 0) {
-    error.value = String(result.error ?? "No repositories available");
-    return null;
-  }
-
-  return openRepoBrowser(result.data);
+  const selectionPromise = openRepoBrowser();
+  void loadRepoBrowserItems(session);
+  return selectionPromise;
 };
 
 const summarizeChanges = (changes: GitChangeSet) => {
@@ -576,6 +615,10 @@ const handleSyncToGitHub = async () => {
     );
 
     if (!result.ok) {
+      if (result.authExpired) {
+        handleAuthExpired();
+        return;
+      }
       error.value = String(result.error ?? "GitHub sync failed");
       return;
     }
@@ -1067,6 +1110,10 @@ const handleMenuNewArchiveGitHub = async () => {
   );
 
   if (!createResult.ok || !createResult.data) {
+    if (createResult.authExpired) {
+      handleAuthExpired();
+      return;
+    }
     error.value = String(createResult.error ?? "Failed to create GitHub repository");
     return;
   }
@@ -1111,6 +1158,10 @@ const handleMenuOpenArchiveGitHub = async () => {
   );
 
   if (!cloneResult.ok || !cloneResult.data) {
+    if (cloneResult.authExpired) {
+      handleAuthExpired();
+      return;
+    }
     error.value = String(cloneResult.error ?? "Failed to clone repository");
     return;
   }
@@ -1138,6 +1189,7 @@ const handleGitHubLogin = async () => {
   }
 
   loading.value = true;
+  isAuthenticating.value = true;
   error.value = null;
 
   try {
@@ -1153,7 +1205,17 @@ const handleGitHubLogin = async () => {
     error.value = caughtError instanceof Error ? caughtError.message : "Unknown error";
   } finally {
     loading.value = false;
+    isAuthenticating.value = false;
   }
+};
+
+const handleCancelAuth = async () => {
+  await window.api?.github?.cancelAuth?.().catch(() => {});
+};
+
+const handleAuthExpired = () => {
+  githubSession.value = null;
+  error.value = "GitHub session expired. Please sign in again.";
 };
 
 const handleGitHubLogout = async () => {
@@ -1178,19 +1240,30 @@ let detachMenuNew: (() => void) | undefined;
 let detachMenuOpen: (() => void) | undefined;
 let detachMenuNewGitHub: (() => void) | undefined;
 let detachMenuOpenGitHub: (() => void) | undefined;
-let detachGitHubAuthDeviceCode: (() => void) | undefined;
+let detachGitHubAuthProgress: (() => void) | undefined;
 
 onMounted(async () => {
   detachMenuNew = window.api?.events?.onMenuNewArchive?.(handleMenuNewArchive);
   detachMenuOpen = window.api?.events?.onMenuOpenArchive?.(handleMenuOpenArchive);
   detachMenuNewGitHub = window.api?.events?.onMenuNewArchiveGitHub?.(handleMenuNewArchiveGitHub);
   detachMenuOpenGitHub = window.api?.events?.onMenuOpenArchiveGitHub?.(handleMenuOpenArchiveGitHub);
-  detachGitHubAuthDeviceCode = window.api?.events?.onGitHubAuthDeviceCode?.((details) => {
-    const verificationUrl = details.verificationUriComplete || details.verificationUri;
-    info.value = [
-      `GitHub device code: ${details.userCode}`,
-      `Authorize at: ${verificationUrl}`,
-    ].join("\n");
+  detachGitHubAuthProgress = window.api?.events?.onGitHubAuthProgress?.((details) => {
+    if (details.stage === "error") {
+      error.value = details.message;
+      return;
+    }
+
+    if (details.stage === "device_code") {
+      const verificationUrl = details.verificationUriComplete || details.verificationUri || "";
+      info.value = [
+        details.message,
+        `GitHub device code: ${details.userCode || "(not provided)"}`,
+        `Authorize at: ${verificationUrl}`,
+      ].join("\n");
+      return;
+    }
+
+    info.value = details.message;
   });
 
   if (!window.api?.github?.restoreSession) {
@@ -1222,7 +1295,7 @@ onBeforeUnmount(() => {
   detachMenuOpen?.();
   detachMenuNewGitHub?.();
   detachMenuOpenGitHub?.();
-  detachGitHubAuthDeviceCode?.();
+  detachGitHubAuthProgress?.();
 });
 </script>
 
@@ -1242,6 +1315,10 @@ onBeforeUnmount(() => {
             <span>{{ githubSession.username }}</span>
           </div>
           <PButton label="Logout" severity="secondary" :disabled="loading" @click="handleGitHubLogout" />
+        </template>
+        <template v-else-if="isAuthenticating">
+          <span class="auth-in-progress-label">Waiting for GitHub...</span>
+          <PButton label="Cancel" severity="secondary" @click="handleCancelAuth" />
         </template>
         <PButton
           v-else
@@ -1280,8 +1357,9 @@ onBeforeUnmount(() => {
               class="field-input"
               type="text"
               placeholder="Search by repository name or description"
+              :disabled="repoBrowserLoading"
             />
-            <select v-model="repoBrowserOrgFilter" class="manifest-type-select">
+            <select v-model="repoBrowserOrgFilter" class="manifest-type-select" :disabled="repoBrowserLoading">
               <option v-for="owner in repoBrowserOrgOptions()" :key="owner" :value="owner">
                 {{ owner === "all" ? "All owners" : owner }}
               </option>
@@ -1289,7 +1367,17 @@ onBeforeUnmount(() => {
           </div>
 
           <div class="repo-browser-list">
-            <div v-if="groupedRepoBrowserItems().length === 0" class="empty-state">
+            <div v-if="repoBrowserLoading" class="repo-browser-status" aria-live="polite">
+              <span class="repo-browser-spinner" aria-hidden="true" />
+              <span>Loading repositories from GitHub...</span>
+            </div>
+
+            <div v-else-if="repoBrowserLoadError" class="repo-browser-status repo-browser-status--error">
+              <span>{{ repoBrowserLoadError }}</span>
+              <PButton label="Retry" severity="secondary" size="small" @click="retryLoadRepoBrowserItems" />
+            </div>
+
+            <div v-else-if="groupedRepoBrowserItems().length === 0" class="empty-state">
               No repositories match your filters.
             </div>
 
@@ -1668,6 +1756,11 @@ h1 {
   backdrop-filter: blur(8px);
 }
 
+.auth-in-progress-label {
+  font-size: 0.85rem;
+  opacity: 0.8;
+}
+
 .content-grid {
   display: grid;
   grid-template-columns: 1fr;
@@ -1926,6 +2019,36 @@ h1 {
   overflow: auto;
   display: grid;
   gap: 1rem;
+}
+
+.repo-browser-status {
+  min-height: 180px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 0.75rem;
+  color: #314359;
+  text-align: center;
+}
+
+.repo-browser-status--error {
+  color: #7f1d1d;
+}
+
+.repo-browser-spinner {
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  border: 3px solid rgba(40, 93, 168, 0.22);
+  border-top-color: #285da8;
+  animation: repo-browser-spin 0.9s linear infinite;
+}
+
+@keyframes repo-browser-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .repo-group {

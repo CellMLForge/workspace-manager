@@ -152,9 +152,13 @@ ipcMain.handle(
  * GitHub operation handlers
  */
 ipcMain.handle("github:authenticateOAuth", async (event) => {
-  return githubService.authenticateOAuth((details) => {
-    event.sender.send("github:auth-device-code", details);
+  return githubService.authenticateOAuth((authEvent) => {
+    event.sender.send("github:auth-progress", authEvent);
   });
+});
+
+ipcMain.handle("github:cancelAuth", async () => {
+  githubService.cancelAuthFlow();
 });
 
 ipcMain.handle("github:restoreSession", async () => {
