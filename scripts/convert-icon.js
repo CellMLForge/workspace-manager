@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
 /**
- * Convert build/compact-mark.png to build/icon.ico for Windows installer
- * First squares up the image using sharp, then converts to ICO
+ * Convert the tracked public compact mark into build/icon.ico for Windows packaging.
+ * First squares up the image using sharp, then converts to ICO.
  */
 
 const sharp = require('sharp');
@@ -10,7 +10,7 @@ const pngToIco = require('png-to-ico').default;
 const path = require('path');
 const fs = require('fs');
 
-const inputPath = path.join(__dirname, '../build/compact-mark.png');
+const inputPath = path.join(__dirname, '../public/branding/compact-mark.png');
 const tempPath = path.join(__dirname, '../build/icon-squared.png');
 const outputPath = path.join(__dirname, '../build/icon.ico');
 

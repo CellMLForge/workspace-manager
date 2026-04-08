@@ -64,15 +64,24 @@ const buildApplicationMenu = () => {
 };
 
 const createWindow = () => {
+  const iconPath = process.platform === "win32"
+    ? path.join(__dirname, "../../build/icon.ico")
+    : isDev
+      ? path.join(__dirname, "../../public/branding/compact-mark.png")
+      : path.join(__dirname, "../renderer/branding/compact-mark.png");
+
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
+    icon: iconPath,
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
       preload: path.join(__dirname, "preload.js"),
     },
   });
+
+  mainWindow.setTitle("CellMLForge Workspace Manager");
 
   const startUrl = isDev
     ? "http://localhost:5173"

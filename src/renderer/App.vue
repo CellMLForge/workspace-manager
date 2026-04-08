@@ -1326,9 +1326,16 @@ onBeforeUnmount(() => {
 <template>
   <div class="app-shell">
     <header class="topbar">
-      <div>
-        <p class="eyebrow">Desktop-first OMEX workflow</p>
-        <h1>OMEX Archive Manager</h1>
+      <div class="topbar-primary">
+        <div class="header-brand">
+          <img src="/branding/cellmlforge-logo.png" alt="CellMLForge Logo" class="brand-logo" />
+          <div class="brand-text">
+            <div class="brand-title-row">
+              <h1>Workspace Manager</h1>
+            </div>
+            <p class="eyebrow">A manager for PMR workspaces and OMEX/COMBINE archives</p>
+          </div>
+        </div>
         <p v-if="currentArchive" class="project-name">{{ currentArchive.name }}</p>
       </div>
 
@@ -1765,8 +1772,41 @@ onBeforeUnmount(() => {
   gap: 1.5rem;
 }
 
+.topbar-primary {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.header-brand {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.9rem;
+  min-width: 0;
+}
+
+.brand-logo {
+  flex: 0 0 auto;
+  width: auto;
+  height: clamp(3.5rem, 3vw, 3rem);
+  object-fit: contain;
+}
+
+.brand-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.brand-title-row {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
 .eyebrow {
-  margin: 0 0 0.5rem;
+  margin: 0.35rem 0 0;
   font-size: 0.8rem;
   font-weight: 700;
   letter-spacing: 0.12em;
@@ -2261,6 +2301,14 @@ h1 {
 
   .topbar {
     flex-direction: column;
+  }
+
+  .header-brand {
+    gap: 0.7rem;
+  }
+
+  .brand-logo {
+    height: 2rem;
   }
 
   .content-grid {

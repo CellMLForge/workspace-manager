@@ -1,6 +1,6 @@
-# OMEX Archive Manager
+# CellMLForge Workspace Manager
 
-A desktop-first application for managing OMEX/COMBINE archives with integrated git version control and GitHub push capabilities. Supports drag-and-drop file import, automated manifest management, and cross-platform local execution.
+The CellMLForge Workspace Manager is a desktop-first application for managing OMEX/COMBINE archives with integrated git version control and GitHub push capabilities. Built as a component of the CellMLForge ecosystem, it supports drag-and-drop file import, automated manifest management, and cross-platform local execution.
 
 ## Features
 
@@ -27,7 +27,7 @@ npm install
 
 ### Development
 
-Run the app in development mode with hot-reload for both React and Electron:
+Run the app in development mode with hot-reload for both Vue and Electron:
 
 ```bash
 npm run dev
