@@ -9,15 +9,15 @@ interface IpcResult<T> {
 }
 
 interface RendererApi {
-  archive: {
-    create: (name: string, workingDir: string, description?: string) => Promise<IpcResult<import("@domain/models").ArchiveProject>>;
-    open: (workingDir: string) => Promise<IpcResult<import("@domain/models").ArchiveProject>>;
+  workspace: {
+    create: (name: string, workingDir: string, description?: string) => Promise<IpcResult<import("@domain/models").WorkspaceProject>>;
+    open: (workingDir: string) => Promise<IpcResult<import("@domain/models").WorkspaceProject>>;
     importFiles: (
-      archive: import("@domain/models").ArchiveProject,
+      workspace: import("@domain/models").WorkspaceProject,
       sourceFiles: string[],
       overwriteExisting?: boolean
     ) => Promise<IpcResult<import("@domain/models").WorkingTreeFile[]>>;
-    listFiles: (archive: import("@domain/models").ArchiveProject) => Promise<IpcResult<import("@domain/models").WorkingTreeFile[]>>;
+    listFiles: (workspace: import("@domain/models").WorkspaceProject) => Promise<IpcResult<import("@domain/models").WorkingTreeFile[]>>;
   };
   manifest: {
     parse: (manifestPath: string) => Promise<IpcResult<import("@domain/models").ManifestEntry[]>>;
@@ -27,9 +27,9 @@ interface RendererApi {
     ) => Promise<IpcResult<void>>;
   };
   git: {
-    detectChanges: (archive: import("@domain/models").ArchiveProject) => Promise<IpcResult<import("@domain/models").GitChangeSet>>;
+    detectChanges: (workspace: import("@domain/models").WorkspaceProject) => Promise<IpcResult<import("@domain/models").GitChangeSet>>;
     suggestCommitMessage: (changes: import("@domain/models").GitChangeSet) => Promise<IpcResult<import("@domain/models").CommitSuggestion>>;
-    commit: (archive: import("@domain/models").ArchiveProject, message: string) => Promise<IpcResult<string>>;
+    commit: (workspace: import("@domain/models").WorkspaceProject, message: string) => Promise<IpcResult<string>>;
   };
   github: {
     authenticateOAuth: () => Promise<IpcResult<import("@domain/models").GitHubSession>>;
@@ -81,10 +81,10 @@ interface RendererApi {
     getPathForFile: (file: File) => string;
   };
   events: {
-    onMenuNewArchive: (callback: () => void) => () => void;
-    onMenuOpenArchive: (callback: () => void) => () => void;
-    onMenuNewArchiveGitHub: (callback: () => void) => () => void;
-    onMenuOpenArchiveGitHub: (callback: () => void) => () => void;
+    onMenuNewWorkspace: (callback: () => void) => () => void;
+    onMenuOpenWorkspace: (callback: () => void) => () => void;
+    onMenuNewWorkspaceGitHub: (callback: () => void) => () => void;
+    onMenuOpenWorkspaceGitHub: (callback: () => void) => () => void;
     onGitHubAuthProgress: (
       callback: (details: {
         stage: "starting" | "device_code" | "browser_opened" | "waiting" | "success" | "error";

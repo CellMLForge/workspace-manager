@@ -1,9 +1,9 @@
 /**
- * Core domain models for OMEX Archive Manager
+ * Core domain models for CellMLForge Workspace Manager
  */
 
 // Workflow state machine states
-export enum ArchiveState {
+export enum WorkspaceState {
   Empty = "empty",
   WorkingTreeDirty = "working-tree-dirty",
   ManifestUpdated = "manifest-updated",
@@ -15,10 +15,10 @@ export enum ArchiveState {
   Error = "error",
 }
 
-// OMEX Manifest entry for archive contents
+// OMEX Manifest entry for workspace contents
 export interface ManifestEntry {
   format: string; // e.g., "application/pdf", "text/plain"
-  location: string; // relative path in archive
+  location: string; // relative path in workspace
   description?: string;
   master?: boolean;
   created?: string; // ISO 8601 timestamp
@@ -27,8 +27,8 @@ export interface ManifestEntry {
   checksum?: string; // optional: SHA256 or similar
 }
 
-// Represents the archiveized working tree
-export interface ArchiveProject {
+// Represents a workspace working tree
+export interface WorkspaceProject {
   id: string; // UUID
   name: string;
   description?: string;
@@ -38,14 +38,14 @@ export interface ArchiveProject {
   gitRepoUrl?: string; // GitHub repo for pushing
   gitBranch: string; // target branch for commits (default: main)
   manifestPath: string; // path to manifest.xml within working tree
-  state: ArchiveState;
+  state: WorkspaceState;
   createdAt: string; // ISO 8601
   lastModifiedAt: string; // ISO 8601
 }
 
 // Represents a file or folder in the working tree
 export interface WorkingTreeFile {
-  path: string; // relative within archive
+  path: string; // relative within workspace
   absolutePath: string; // absolute filesystem path
   isDirectory: boolean;
   size: number; // bytes

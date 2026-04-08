@@ -24,31 +24,31 @@ const buildApplicationMenu = () => {
       label: "File",
       submenu: [
         {
-          label: "New",
+          label: "New Workspace",
           accelerator: "CmdOrCtrl+N",
           click: () => {
-            mainWindow?.webContents.send("menu:new-archive");
+            mainWindow?.webContents.send("menu:new-workspace");
           },
         },
         {
-          label: "Open",
+          label: "Open Workspace",
           accelerator: "CmdOrCtrl+O",
           click: () => {
-            mainWindow?.webContents.send("menu:open-archive");
+            mainWindow?.webContents.send("menu:open-workspace");
           },
         },
         {
-          label: "New from GitHub...",
+          label: "New Workspace from GitHub...",
           accelerator: "CmdOrCtrl+Shift+N",
           click: () => {
-            mainWindow?.webContents.send("menu:new-archive-github");
+            mainWindow?.webContents.send("menu:new-workspace-github");
           },
         },
         {
-          label: "Open from GitHub...",
+          label: "Open Workspace from GitHub...",
           accelerator: "CmdOrCtrl+Shift+O",
           click: () => {
-            mainWindow?.webContents.send("menu:open-archive-github");
+            mainWindow?.webContents.send("menu:open-workspace-github");
           },
         },
         { type: "separator" },

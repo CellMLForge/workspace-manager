@@ -5,50 +5,50 @@
 import { BrowserWindow, dialog, ipcMain, shell } from "electron";
 import type { OpenDialogOptions } from "electron";
 import {
-  ArchiveProject,
+  WorkspaceProject,
   GitHubSession,
   ManifestEntry,
   OperationResult,
 } from "../domain/models";
-import { archiveService } from "../services/archive";
+import { workspaceService } from "../services/workspace";
 import { manifestService } from "../services/manifest";
 import { gitService } from "../services/git";
 import { githubService } from "../services/github";
 import { zipService } from "../services/zip";
 
 /**
- * Archive operation handlers
+ * Workspace operation handlers
  */
 ipcMain.handle(
-  "archive:create",
+  "workspace:create",
   async (event, name: string, workingDir: string, description?: string) => {
-    return archiveService.createArchive(name, workingDir, description);
+    return workspaceService.createWorkspace(name, workingDir, description);
   }
 );
 
-ipcMain.handle("archive:open", async (event, workingDir: string) => {
-  return archiveService.openArchive(workingDir);
+ipcMain.handle("workspace:open", async (event, workingDir: string) => {
+  return workspaceService.openWorkspace(workingDir);
 });
 
 ipcMain.handle(
-  "archive:importFiles",
-  async (event, archive: ArchiveProject, sourceFiles: string[], overwriteExisting?: boolean) => {
-    return archiveService.importFiles(archive, sourceFiles, !!overwriteExisting);
+  "workspace:importFiles",
+  async (event, workspace: WorkspaceProject, sourceFiles: string[], overwriteExisting?: boolean) => {
+    return workspaceService.importFiles(workspace, sourceFiles, !!overwriteExisting);
   }
 );
 
-ipcMain.handle("archive:listFiles", async (event, archive: ArchiveProject) => {
-  return archiveService.listFiles(archive);
+ipcMain.handle("workspace:listFiles", async (event, workspace: WorkspaceProject) => {
+  return workspaceService.listFiles(workspace);
 });
 
-ipcMain.handle("archive:getFileContent", async (event, filePath: string) => {
-  return archiveService.getFileContent(filePath);
+ipcMain.handle("workspace:getFileContent", async (event, filePath: string) => {
+  return workspaceService.getFileContent(filePath);
 });
 
 ipcMain.handle(
-  "archive:deleteFile",
-  async (event, archive: ArchiveProject, filePath: string) => {
-    return archiveService.deleteFile(archive, filePath);
+  "workspace:deleteFile",
+  async (event, workspace: WorkspaceProject, filePath: string) => {
+    return workspaceService.deleteFile(workspace, filePath);
   }
 );
 
@@ -103,8 +103,8 @@ ipcMain.handle(
 
 ipcMain.handle(
   "git:detectChanges",
-  async (event, archive: ArchiveProject) => {
-    return gitService.detectChanges(archive);
+  async (event, workspace: WorkspaceProject) => {
+    return gitService.detectChanges(workspace);
   }
 );
 
@@ -114,8 +114,8 @@ ipcMain.handle("git:suggestCommitMessage", async (event, changes) => {
 
 ipcMain.handle(
   "git:commit",
-  async (event, archive: ArchiveProject, message: string) => {
-    return gitService.commit(archive, message);
+  async (event, workspace: WorkspaceProject, message: string) => {
+    return gitService.commit(workspace, message);
   }
 );
 

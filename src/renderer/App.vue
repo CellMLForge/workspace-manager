@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, onMounted, ref, toRaw, watch } from "vue";
 import type {
-  ArchiveProject,
+  WorkspaceProject,
   CommitSuggestion,
   GitChangeSet,
   GitHubSession,
@@ -10,7 +10,7 @@ import type {
   WorkingTreeFile,
 } from "@domain/models";
 
-const currentArchive = ref<ArchiveProject | null>(null);
+const currentWorkspace = ref<WorkspaceProject | null>(null);
 const githubSession = ref<GitHubSession | null>(null);
 const loading = ref(false);
 const isAuthenticating = ref(false);
@@ -20,9 +20,9 @@ const committing = ref(false);
 const dragActive = ref(false);
 const error = ref<string | null>(null);
 const info = ref<string | null>(null);
-const archiveName = ref("My Archive");
-const workingPath = ref("C:/tmp/omex-archive");
-const zipOutputPath = ref("C:/tmp/omex-archive.zip");
+const workspaceName = ref("My Workspace");
+const workingPath = ref("C:/tmp/omex-workspace");
+const zipOutputPath = ref("C:/tmp/omex-workspace.zip");
 const openCorLaunchUrl = ref<string | null>(null);
 const files = ref<WorkingTreeFile[]>([]);
 const changeSet = ref<GitChangeSet | null>(null);
@@ -423,7 +423,7 @@ const syncManifestEditorState = (workingTreeFiles: WorkingTreeFile[]) => {
 };
 
 const applyManifestSelections = async () => {
-  if (!currentArchive.value || !window.api?.manifest?.generate) {
+  if (!currentWorkspace.value || !window.api?.manifest?.generate) {
     error.value = "Manifest API not available";
     return;
   }
@@ -437,7 +437,7 @@ const applyManifestSelections = async () => {
       master: isMasterForFile(file.path),
     }));
 
-  const result = await window.api.manifest.generate(currentArchive.value.manifestPath, entries);
+  const result = await window.api.manifest.generate(currentWorkspace.value.manifestPath, entries);
   if (!result.ok) {
     error.value = String(result.error ?? "Failed to update manifest.xml");
     return;
@@ -491,26 +491,26 @@ const onManifestMasterChanged = async (filePath: string) => {
 };
 
 const refreshFiles = async () => {
-  if (!currentArchive.value || !window.api?.archive?.listFiles) {
+  if (!currentWorkspace.value || !window.api?.workspace?.listFiles) {
     return;
   }
 
-  const result = await window.api.archive.listFiles(toRaw(currentArchive.value)!);
+  const result = await window.api.workspace.listFiles(toRaw(currentWorkspace.value)!);
   if (result.ok) {
     files.value = result.data ?? [];
     syncManifestEditorState(files.value);
     return;
   }
 
-  error.value = String(result.error ?? "Unable to list archive files");
+  error.value = String(result.error ?? "Unable to list workspace files");
 };
 
 const refreshGitInsights = async () => {
-  if (!currentArchive.value || !window.api?.git?.detectChanges) {
+  if (!currentWorkspace.value || !window.api?.git?.detectChanges) {
     return;
   }
 
-  const changeResult = await window.api.git.detectChanges(toRaw(currentArchive.value)!);
+  const changeResult = await window.api.git.detectChanges(toRaw(currentWorkspace.value)!);
   if (!changeResult.ok || !changeResult.data) {
     return;
   }
@@ -536,7 +536,7 @@ const refreshGitInsights = async () => {
 };
 
 const handleCommitChanges = async () => {
-  if (!currentArchive.value || !window.api?.git?.commit) {
+  if (!currentWorkspace.value || !window.api?.git?.commit) {
     error.value = "Git commit API not available";
     return;
   }
@@ -557,7 +557,7 @@ const handleCommitChanges = async () => {
   error.value = null;
 
   try {
-    const result = await window.api.git.commit(toRaw(currentArchive.value)!, message);
+    const result = await window.api.git.commit(toRaw(currentWorkspace.value)!, message);
     if (!result.ok) {
       error.value = String(result.error ?? "Commit failed");
       return;
@@ -580,7 +580,7 @@ const handleSyncToGitHub = async () => {
     return;
   }
 
-  if (!currentArchive.value || !window.api?.github?.push) {
+  if (!currentWorkspace.value || !window.api?.github?.push) {
     error.value = "GitHub push API not available";
     return;
   }
@@ -589,7 +589,7 @@ const handleSyncToGitHub = async () => {
   error.value = null;
 
   try {
-    let repoUrl = currentArchive.value.gitRepoUrl ?? "";
+    let repoUrl = currentWorkspace.value.gitRepoUrl ?? "";
     if (!repoUrl) {
       const selectedRepoUrl = await chooseGitHubRepoUrl(githubSession.value);
       if (!selectedRepoUrl) {
@@ -599,21 +599,21 @@ const handleSyncToGitHub = async () => {
 
       repoUrl = selectedRepoUrl;
 
-      currentArchive.value = {
-        ...currentArchive.value,
+      currentWorkspace.value = {
+        ...currentWorkspace.value,
         gitRepoUrl: repoUrl,
       };
     }
 
     const pushContext: PushContext = {
       repoUrl,
-      branch: currentArchive.value.gitBranch || "main",
+      branch: currentWorkspace.value.gitBranch || "main",
       isNewRepo: false,
     };
 
     const result = await window.api.github.push(
       toRaw(githubSession.value)!,
-      currentArchive.value.workingDir,
+      currentWorkspace.value.workingDir,
       pushContext
     );
 
@@ -634,18 +634,18 @@ const handleSyncToGitHub = async () => {
   }
 };
 
-const bootstrapArchiveContext = async (archive: ArchiveProject) => {
-  currentArchive.value = archive;
-  workingPath.value = archive.workingDir;
-  zipOutputPath.value = archive.zipPath;
+const bootstrapWorkspaceContext = async (workspace: WorkspaceProject) => {
+  currentWorkspace.value = workspace;
+  workingPath.value = workspace.workingDir;
+  zipOutputPath.value = workspace.zipPath;
   openCorLaunchUrl.value = null;
-  info.value = `Archive loaded at ${archive.workingDir}`;
+  info.value = `Workspace loaded at ${workspace.workingDir}`;
   await refreshFiles();
   await refreshGitInsights();
 };
 
-const handleCreateArchive = async (name: string) => {
-  if (!window.api?.archive?.create) {
+const handleCreateWorkspace = async (name: string) => {
+  if (!window.api?.workspace?.create) {
     error.value = "API not available";
     return;
   }
@@ -661,14 +661,14 @@ const handleCreateArchive = async (name: string) => {
       return;
     }
 
-    const result = await window.api.archive.create(name, workingDir);
+    const result = await window.api.workspace.create(name, workingDir);
 
     if (result.ok && result.data) {
-      await bootstrapArchiveContext(result.data);
+      await bootstrapWorkspaceContext(result.data);
       return;
     }
 
-    error.value = String(result.error ?? "Failed to create archive");
+    error.value = String(result.error ?? "Failed to create workspace");
   } catch (caughtError) {
     error.value = caughtError instanceof Error ? caughtError.message : "Unknown error";
   } finally {
@@ -676,9 +676,9 @@ const handleCreateArchive = async (name: string) => {
   }
 };
 
-const handleOpenArchive = async () => {
-  if (!window.api?.archive?.open) {
-    error.value = "Archive open API not available";
+const handleOpenWorkspace = async () => {
+  if (!window.api?.workspace?.open) {
+    error.value = "Workspace open API not available";
     return;
   }
 
@@ -693,13 +693,13 @@ const handleOpenArchive = async () => {
       return;
     }
 
-    const result = await window.api.archive.open(targetPath);
+    const result = await window.api.workspace.open(targetPath);
     if (result.ok && result.data) {
-      await bootstrapArchiveContext(result.data);
+      await bootstrapWorkspaceContext(result.data);
       return;
     }
 
-    error.value = String(result.error ?? "Failed to open archive");
+    error.value = String(result.error ?? "Failed to open workspace");
   } catch (caughtError) {
     error.value = caughtError instanceof Error ? caughtError.message : "Unknown error";
   } finally {
@@ -708,7 +708,7 @@ const handleOpenArchive = async () => {
 };
 
 const importFiles = async (sourcePaths: string[]) => {
-  if (!currentArchive.value || !window.api?.archive?.importFiles) {
+  if (!currentWorkspace.value || !window.api?.workspace?.importFiles) {
     error.value = "Import API not available";
     return;
   }
@@ -755,8 +755,8 @@ const importFiles = async (sourcePaths: string[]) => {
       }
     }
 
-    const result = await window.api.archive.importFiles(
-      toRaw(currentArchive.value)!,
+    const result = await window.api.workspace.importFiles(
+      toRaw(currentWorkspace.value)!,
       sourcePaths,
       overwriteExisting
     );
@@ -901,8 +901,8 @@ const pickOpenDirectory = async () => {
 };
 
 const pickImportSources = async () => {
-  if (!currentArchive.value) {
-    error.value = "Load or create an archive before importing files.";
+  if (!currentWorkspace.value) {
+    error.value = "Load or create a workspace before importing files.";
     return;
   }
 
@@ -912,13 +912,13 @@ const pickImportSources = async () => {
     return;
   }
 
-  const sourcePaths = await window.api.ui.pickImportPaths(currentArchive.value.workingDir);
+  const sourcePaths = await window.api.ui.pickImportPaths(currentWorkspace.value.workingDir);
   await importFiles(sourcePaths);
 };
 
 const pickImportDirectory = async () => {
-  if (!currentArchive.value) {
-    error.value = "Load or create an archive before importing files.";
+  if (!currentWorkspace.value) {
+    error.value = "Load or create a workspace before importing files.";
     return;
   }
 
@@ -928,7 +928,7 @@ const pickImportDirectory = async () => {
     return;
   }
 
-  const sourcePath = await window.api.ui.pickImportDirectory(currentArchive.value.workingDir);
+  const sourcePath = await window.api.ui.pickImportDirectory(currentWorkspace.value.workingDir);
   if (!sourcePath) {
     return;
   }
@@ -949,8 +949,8 @@ const pickZipOutputPath = async () => {
 };
 
 const handleExportZip = async () => {
-  if (!currentArchive.value) {
-    error.value = "Load or create an archive before exporting.";
+  if (!currentWorkspace.value) {
+    error.value = "Load or create a workspace before exporting.";
     return;
   }
 
@@ -971,14 +971,14 @@ const handleExportZip = async () => {
   openCorLaunchUrl.value = null;
 
   try {
-    const result = await window.api.zip.build(currentArchive.value.workingDir, targetPath, [
+    const result = await window.api.zip.build(currentWorkspace.value.workingDir, targetPath, [
       ".git",
       "node_modules",
       "dist",
     ]);
 
     if (!result.ok) {
-      error.value = String(result.error ?? "Failed to build ZIP archive");
+      error.value = String(result.error ?? "Failed to build workspace ZIP");
       return;
     }
 
@@ -1047,40 +1047,40 @@ const handleCopyOpenCorUrl = async () => {
   }
 };
 
-const handleMenuNewArchive = async () => {
+const handleMenuNewWorkspace = async () => {
   await pickWorkingDirectory();
   if (!workingPath.value.trim()) {
     return;
   }
 
-  await handleCreateArchive(archiveName.value || "My Archive");
+  await handleCreateWorkspace(workspaceName.value || "My Workspace");
 };
 
-const handleMenuOpenArchive = async () => {
+const handleMenuOpenWorkspace = async () => {
   await pickOpenDirectory();
   if (!workingPath.value.trim()) {
     return;
   }
 
-  await handleOpenArchive();
+  await handleOpenWorkspace();
 };
 
-const handleMenuNewArchiveGitHub = async () => {
+const handleMenuNewWorkspaceGitHub = async () => {
   if (!githubSession.value) {
     error.value = "Sign in to GitHub before using New from GitHub.";
     return;
   }
 
-  await handleMenuNewArchive();
-  if (!currentArchive.value) {
+  await handleMenuNewWorkspace();
+  if (!currentWorkspace.value) {
     return;
   }
 
-  const repoName = (currentArchive.value.name || "omex-archive")
+  const repoName = (currentWorkspace.value.name || "omex-workspace")
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9-]+/g, "-")
-    .replace(/^-+|-+$/g, "") || "omex-archive";
+    .replace(/^-+|-+$/g, "") || "omex-workspace";
 
   const enteredRepoName = await promptForRepoName(repoName);
   if (!enteredRepoName) {
@@ -1092,7 +1092,7 @@ const handleMenuNewArchiveGitHub = async () => {
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9-]+/g, "-")
-    .replace(/^-+|-+$/g, "") || "omex-archive";
+    .replace(/^-+|-+$/g, "") || "omex-workspace";
 
   let isPrivate = false;
   if (window.api?.ui?.confirmPrivateRepository) {
@@ -1108,7 +1108,7 @@ const handleMenuNewArchiveGitHub = async () => {
   const createResult = await window.api.github.createRepository(
     toRaw(githubSession.value)!,
     normalizedRepoName,
-    `Workspace for ${currentArchive.value.name}`,
+    `Workspace for ${currentWorkspace.value.name}`,
     isPrivate
   );
 
@@ -1121,15 +1121,15 @@ const handleMenuNewArchiveGitHub = async () => {
     return;
   }
 
-  currentArchive.value = {
-    ...currentArchive.value,
+  currentWorkspace.value = {
+    ...currentWorkspace.value,
     gitRepoUrl: createResult.data,
   };
 
   info.value = `Created and linked GitHub repository: ${createResult.data}`;
 };
 
-const handleMenuOpenArchiveGitHub = async () => {
+const handleMenuOpenWorkspaceGitHub = async () => {
   if (!githubSession.value) {
     error.value = "Sign in to GitHub before using Open from GitHub.";
     return;
@@ -1169,18 +1169,18 @@ const handleMenuOpenArchiveGitHub = async () => {
     return;
   }
 
-  const openResult = await window.api.archive.open(cloneResult.data);
+  const openResult = await window.api.workspace.open(cloneResult.data);
   if (!openResult.ok || !openResult.data) {
-    error.value = String(openResult.error ?? "Repository cloned but archive open failed");
+    error.value = String(openResult.error ?? "Repository cloned but workspace open failed");
     return;
   }
 
-  const linkedArchive: ArchiveProject = {
+  const linkedWorkspace: WorkspaceProject = {
     ...openResult.data,
     gitRepoUrl: repoUrl,
   };
 
-  await bootstrapArchiveContext(linkedArchive);
+  await bootstrapWorkspaceContext(linkedWorkspace);
 
   info.value = `Cloned and opened GitHub repository: ${repoUrl}`;
 };
@@ -1261,10 +1261,10 @@ let detachMenuOpenGitHub: (() => void) | undefined;
 let detachGitHubAuthProgress: (() => void) | undefined;
 
 onMounted(async () => {
-  detachMenuNew = window.api?.events?.onMenuNewArchive?.(handleMenuNewArchive);
-  detachMenuOpen = window.api?.events?.onMenuOpenArchive?.(handleMenuOpenArchive);
-  detachMenuNewGitHub = window.api?.events?.onMenuNewArchiveGitHub?.(handleMenuNewArchiveGitHub);
-  detachMenuOpenGitHub = window.api?.events?.onMenuOpenArchiveGitHub?.(handleMenuOpenArchiveGitHub);
+  detachMenuNew = window.api?.events?.onMenuNewWorkspace?.(handleMenuNewWorkspace);
+  detachMenuOpen = window.api?.events?.onMenuOpenWorkspace?.(handleMenuOpenWorkspace);
+  detachMenuNewGitHub = window.api?.events?.onMenuNewWorkspaceGitHub?.(handleMenuNewWorkspaceGitHub);
+  detachMenuOpenGitHub = window.api?.events?.onMenuOpenWorkspaceGitHub?.(handleMenuOpenWorkspaceGitHub);
   detachGitHubAuthProgress = window.api?.events?.onGitHubAuthProgress?.((details) => {
     if (details.stage === "error") {
       error.value = details.message;
@@ -1333,10 +1333,10 @@ onBeforeUnmount(() => {
             <div class="brand-title-row">
               <h1>Workspace Manager</h1>
             </div>
-            <p class="eyebrow">A manager for PMR workspaces and OMEX/COMBINE archives</p>
+            <p class="eyebrow">A manager for PMR workspaces and OMEX/COMBINE packages</p>
           </div>
         </div>
-        <p v-if="currentArchive" class="project-name">{{ currentArchive.name }}</p>
+        <p v-if="currentWorkspace" class="project-name">{{ currentWorkspace.name }}</p>
       </div>
 
       <div class="account-panel">
@@ -1459,12 +1459,12 @@ onBeforeUnmount(() => {
 
       <section class="hero-card">
         <PCard>
-          <template #title>Archive overview</template>
+          <template #title>Workspace overview</template>
           <template #content>
-            <p class="menu-hint">Use the File menu to create a new archive or open an existing one.</p>
+            <p class="menu-hint">Use the File menu to create a new workspace or open an existing one.</p>
             <div class="field-grid">
-              <label class="field-label" for="archiveName">Archive name</label>
-              <input id="archiveName" v-model="archiveName" class="field-input" type="text" />
+              <label class="field-label" for="workspaceName">Workspace name</label>
+              <input id="workspaceName" v-model="workspaceName" class="field-input" type="text" />
 
               <label class="field-label" for="workingPath">Workspace location</label>
               <input
@@ -1478,16 +1478,16 @@ onBeforeUnmount(() => {
 
             <ul class="status-list">
               <li>
-                <strong>Archive state:</strong>
-                {{ currentArchive ? currentArchive.state : "Not loaded" }}
+                <strong>Workspace state:</strong>
+                {{ currentWorkspace ? currentWorkspace.state : "Not loaded" }}
               </li>
               <li>
                 <strong>GitHub session:</strong>
                 {{ githubSession ? "Connected" : "Not connected" }}
               </li>
-              <li v-if="currentArchive?.gitRepoUrl">
+              <li v-if="currentWorkspace?.gitRepoUrl">
                 <strong>Linked repository:</strong>
-                {{ currentArchive.gitRepoUrl }}
+                {{ currentWorkspace.gitRepoUrl }}
               </li>
               <li v-if="changeSet">
                 <strong>Pending changes:</strong>
@@ -1496,8 +1496,8 @@ onBeforeUnmount(() => {
             </ul>
 
             <div class="hero-actions">
-              <PButton label="Refresh files" text :disabled="!currentArchive || loading" @click="refreshFiles" />
-              <PButton label="Refresh git insights" text :disabled="!currentArchive" @click="refreshGitInsights" />
+              <PButton label="Refresh files" text :disabled="!currentWorkspace || loading" @click="refreshFiles" />
+              <PButton label="Refresh git insights" text :disabled="!currentWorkspace" @click="refreshGitInsights" />
             </div>
           </template>
         </PCard>
@@ -1509,18 +1509,18 @@ onBeforeUnmount(() => {
           <template #content>
             <div
               class="dropzone"
-              :class="{ active: dragActive, disabled: !currentArchive }"
+              :class="{ active: dragActive, disabled: !currentWorkspace }"
               @drop="onDrop"
               @dragover="onDragOver"
               @dragleave="onDragLeave"
             >
               <p class="dropzone-title">Drag files or folders from your desktop</p>
-              <p class="dropzone-subtitle">Imported files will be copied into the archive working tree.</p>
+              <p class="dropzone-subtitle">Imported files will be copied into the workspace working tree.</p>
               <PButton
                 label="Choose files"
                 icon="pi pi-upload"
                 severity="secondary"
-                :disabled="!currentArchive || importing"
+                :disabled="!currentWorkspace || importing"
                 :loading="importing"
                 @click="pickImportSources"
               />
@@ -1528,7 +1528,7 @@ onBeforeUnmount(() => {
                 label="Choose folder"
                 icon="pi pi-folder-open"
                 severity="secondary"
-                :disabled="!currentArchive || importing"
+                :disabled="!currentWorkspace || importing"
                 :loading="importing"
                 @click="pickImportDirectory"
               />
@@ -1539,7 +1539,7 @@ onBeforeUnmount(() => {
 
       <section class="files-panel">
         <PCard>
-          <template #title>Archive files ({{ files.length }})</template>
+          <template #title>Workspace files ({{ files.length }})</template>
           <template #content>
             <div v-if="files.length === 0" class="empty-state">
               No files loaded yet.
@@ -1632,7 +1632,7 @@ onBeforeUnmount(() => {
                 <PButton
                   label="Build ZIP"
                   icon="pi pi-file-export"
-                  :disabled="!currentArchive || exporting"
+                  :disabled="!currentWorkspace || exporting"
                   :loading="exporting"
                   @click.stop="handleExportZip"
                 />
@@ -1706,12 +1706,12 @@ onBeforeUnmount(() => {
             </div>
 
             <div class="hero-actions">
-              <PButton label="Refresh git insights" text :disabled="!currentArchive" @click="refreshGitInsights" />
+              <PButton label="Refresh git insights" text :disabled="!currentWorkspace" @click="refreshGitInsights" />
               <PButton
                 label="Commit changes"
                 icon="pi pi-check"
                 :loading="committing"
-                :disabled="!currentArchive || !changeSet || committing"
+                :disabled="!currentWorkspace || !changeSet || committing"
                 @click="handleCommitChanges"
               />
               <PButton
@@ -1719,7 +1719,7 @@ onBeforeUnmount(() => {
                 icon="pi pi-upload"
                 severity="secondary"
                 :loading="syncing"
-                :disabled="!currentArchive || !githubSession || syncing"
+                :disabled="!currentWorkspace || !githubSession || syncing"
                 @click="handleSyncToGitHub"
               />
             </div>

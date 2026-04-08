@@ -6,7 +6,7 @@ import { promises as fsPromises } from "fs";
 import * as path from "path";
 import * as git from "isomorphic-git";
 import {
-  ArchiveProject,
+  WorkspaceProject,
   GitChangeSet,
   CommitSuggestion,
   OperationResult,
@@ -57,10 +57,10 @@ export class GitService {
    * Detect changed files in working tree
    */
   async detectChanges(
-    archive: ArchiveProject
+    workspace: WorkspaceProject
   ): Promise<OperationResult<GitChangeSet>> {
     try {
-      const dir = path.resolve(archive.workingDir);
+      const dir = path.resolve(workspace.workingDir);
       const matrix = await git.statusMatrix({ fs, dir });
 
       const added: string[] = [];
@@ -118,18 +118,18 @@ export class GitService {
       const defaultMessage = touchedCellml
         ? `Updating CellML model (${path.basename(touchedCellml)}) due to <enter reason here>`
         : totalCount === 0
-          ? "No archive changes detected"
+          ? "No workspace changes detected"
           : modifiedCount > 0
-            ? `Update archive content (${modifiedCount} modified file${modifiedCount === 1 ? "" : "s"})`
+            ? `Update workspace content (${modifiedCount} modified file${modifiedCount === 1 ? "" : "s"})`
             : addedCount > 0
-              ? `Add archive content (${addedCount} file${addedCount === 1 ? "" : "s"})`
-              : `Remove archive content (${deletedCount} file${deletedCount === 1 ? "" : "s"})`;
+              ? `Add workspace content (${addedCount} file${addedCount === 1 ? "" : "s"})`
+              : `Remove workspace content (${deletedCount} file${deletedCount === 1 ? "" : "s"})`;
 
       const templates = [
         defaultMessage,
         "Update simulation setup: <short reason>",
         "Refine model parameters: <short reason>",
-        "Fix manifest and archive consistency",
+        "Fix manifest and workspace consistency",
       ];
 
       const reasoning = [
@@ -154,11 +154,11 @@ export class GitService {
    * Stage all changes and commit with message
    */
   async commit(
-    archive: ArchiveProject,
+    workspace: WorkspaceProject,
     message: string
   ): Promise<OperationResult<string>> {
     try {
-      const dir = path.resolve(archive.workingDir);
+      const dir = path.resolve(workspace.workingDir);
       const trimmedMessage = message.trim();
 
       if (!trimmedMessage) {
@@ -183,8 +183,8 @@ export class GitService {
         dir,
         message: trimmedMessage,
         author: {
-          name: "OMEX Archive Manager",
-          email: "omex-archive-manager@local",
+          name: "CellMLForge Workspace Manager",
+          email: "workspace-manager@cellmlforge.local",
         },
       });
 

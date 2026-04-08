@@ -68,7 +68,7 @@ src/
 │   ├── index.tsx
 │   └── components/
 ├── services/                # Business logic
-│   ├── archive.ts           # Archive creation and import
+│   ├── workspace.ts         # Workspace creation and import
 │   ├── manifest.ts          # OMEX manifest handling
 │   ├── git.ts               # Git operations
 │   ├── github.ts            # GitHub OAuth and push
@@ -82,7 +82,7 @@ public/                      # Static assets
 
 ### Core Workflows
 
-#### 1. Create Archive
+#### 1. Create Workspace
 
 ```
 User → Create Project

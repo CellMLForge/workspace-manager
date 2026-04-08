@@ -23,7 +23,7 @@ src/
 │   ├── index.tsx
 │   └── components/
 ├── services/            # Business logic
-│   ├── archive.ts       # Archive create/open/import/export
+│   ├── workspace.ts     # Workspace create/open/import/export
 │   ├── manifest.ts      # OMEX manifest parsing and generation
 │   ├── git.ts           # Git operations and change detection
 │   ├── github.ts        # GitHub OAuth and API interactions
@@ -37,7 +37,7 @@ public/                  # Static assets
 
 ## Core Workflows
 
-### 1. Create New Archive (MVP)
+### 1. Create New Workspace (MVP)
 - User initiates new project
 - App creates working directory structure
 - Initialize git repo with .gitignore (excludes *.zip, *.b64)

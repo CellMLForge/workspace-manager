@@ -5,20 +5,20 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 
 contextBridge.exposeInMainWorld("api", {
-  // Archive API
-  archive: {
+  // Workspace API
+  workspace: {
     create: (name: string, workingDir: string, description?: string) =>
-      ipcRenderer.invoke("archive:create", name, workingDir, description),
+      ipcRenderer.invoke("workspace:create", name, workingDir, description),
     open: (workingDir: string) =>
-      ipcRenderer.invoke("archive:open", workingDir),
-    importFiles: (archive: any, sourceFiles: string[], overwriteExisting?: boolean) =>
-      ipcRenderer.invoke("archive:importFiles", archive, sourceFiles, overwriteExisting),
-    listFiles: (archive: any) =>
-      ipcRenderer.invoke("archive:listFiles", archive),
+      ipcRenderer.invoke("workspace:open", workingDir),
+    importFiles: (workspace: any, sourceFiles: string[], overwriteExisting?: boolean) =>
+      ipcRenderer.invoke("workspace:importFiles", workspace, sourceFiles, overwriteExisting),
+    listFiles: (workspace: any) =>
+      ipcRenderer.invoke("workspace:listFiles", workspace),
     getFileContent: (filePath: string) =>
-      ipcRenderer.invoke("archive:getFileContent", filePath),
-    deleteFile: (archive: any, filePath: string) =>
-      ipcRenderer.invoke("archive:deleteFile", archive, filePath),
+      ipcRenderer.invoke("workspace:getFileContent", filePath),
+    deleteFile: (workspace: any, filePath: string) =>
+      ipcRenderer.invoke("workspace:deleteFile", workspace, filePath),
   },
 
   // Manifest API
@@ -41,12 +41,12 @@ contextBridge.exposeInMainWorld("api", {
   git: {
     initRepository: (workingDir: string, gitignoreRules?: string[]) =>
       ipcRenderer.invoke("git:initRepository", workingDir, gitignoreRules),
-    detectChanges: (archive: any) =>
-      ipcRenderer.invoke("git:detectChanges", archive),
+    detectChanges: (workspace: any) =>
+      ipcRenderer.invoke("git:detectChanges", workspace),
     suggestCommitMessage: (changes: any) =>
       ipcRenderer.invoke("git:suggestCommitMessage", changes),
-    commit: (archive: any, message: string) =>
-      ipcRenderer.invoke("git:commit", archive, message),
+    commit: (workspace: any, message: string) =>
+      ipcRenderer.invoke("git:commit", workspace, message),
     getLog: (workingDir: string, limit?: number) =>
       ipcRenderer.invoke("git:getLog", workingDir, limit),
     getCurrentBranch: (workingDir: string) =>
@@ -116,32 +116,32 @@ contextBridge.exposeInMainWorld("api", {
   },
 
   events: {
-    onMenuNewArchive: (callback: () => void) => {
+    onMenuNewWorkspace: (callback: () => void) => {
       const listener = () => callback();
-      ipcRenderer.on("menu:new-archive", listener);
+      ipcRenderer.on("menu:new-workspace", listener);
       return () => {
-        ipcRenderer.removeListener("menu:new-archive", listener);
+        ipcRenderer.removeListener("menu:new-workspace", listener);
       };
     },
-    onMenuOpenArchive: (callback: () => void) => {
+    onMenuOpenWorkspace: (callback: () => void) => {
       const listener = () => callback();
-      ipcRenderer.on("menu:open-archive", listener);
+      ipcRenderer.on("menu:open-workspace", listener);
       return () => {
-        ipcRenderer.removeListener("menu:open-archive", listener);
+        ipcRenderer.removeListener("menu:open-workspace", listener);
       };
     },
-    onMenuNewArchiveGitHub: (callback: () => void) => {
+    onMenuNewWorkspaceGitHub: (callback: () => void) => {
       const listener = () => callback();
-      ipcRenderer.on("menu:new-archive-github", listener);
+      ipcRenderer.on("menu:new-workspace-github", listener);
       return () => {
-        ipcRenderer.removeListener("menu:new-archive-github", listener);
+        ipcRenderer.removeListener("menu:new-workspace-github", listener);
       };
     },
-    onMenuOpenArchiveGitHub: (callback: () => void) => {
+    onMenuOpenWorkspaceGitHub: (callback: () => void) => {
       const listener = () => callback();
-      ipcRenderer.on("menu:open-archive-github", listener);
+      ipcRenderer.on("menu:open-workspace-github", listener);
       return () => {
-        ipcRenderer.removeListener("menu:open-archive-github", listener);
+        ipcRenderer.removeListener("menu:open-workspace-github", listener);
       };
     },
     onGitHubAuthProgress: (

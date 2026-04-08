@@ -1,13 +1,13 @@
 /**
- * Archive management service: create, open, import, export archives
+ * Workspace management service: create, open, import, and export workspace artifacts
  */
 import fsDefault from "fs";
 import { constants as fsConstants, promises as fs } from "fs";
 import * as path from "path";
 import { randomUUID } from "crypto";
 import * as git from "isomorphic-git";
-import { ArchiveProject, OperationResult, WorkingTreeFile } from "../domain/models";
-import { ArchiveState } from "../domain/models";
+import { WorkspaceProject, OperationResult, WorkingTreeFile } from "../domain/models";
+import { WorkspaceState } from "../domain/models";
 import { gitService } from "./git";
 
 const MANIFEST_FILE_NAME = "manifest.xml";
@@ -18,17 +18,17 @@ const normalizeSlashes = (value: string) => value.split(path.sep).join("/");
 const toErrorMessage = (error: unknown) =>
   error instanceof Error ? error : new Error(String(error));
 
-const buildArchiveSlug = (name: string) => {
+const buildWorkspaceSlug = (name: string) => {
   const slug = name
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
 
-  return slug || "archive";
+  return slug || "workspace";
 };
 
-const createManifestStub = (archiveName: string) => `<?xml version="1.0" encoding="UTF-8"?>
+const createManifestStub = (workspaceName: string) => `<?xml version="1.0" encoding="UTF-8"?>
 <omexManifest xmlns="http://identifiers.org/combine.specifications/omex-manifest">
   <content location="." format="http://identifiers.org/combine.specifications/omex" />
   <content location="./${MANIFEST_FILE_NAME}" format="http://identifiers.org/combine.specifications/omex-manifest" />
@@ -109,21 +109,21 @@ const normalizeGitHubRemoteUrl = (remoteUrl: string): string => {
   return trimmed;
 };
 
-export class ArchiveService {
+export class WorkspaceService {
   /**
-   * Create a new empty archive project
+  * Create a new empty workspace project
    */
-  async createArchive(
+  async createWorkspace(
     name: string,
     workingDir: string,
     description?: string
-  ): Promise<OperationResult<ArchiveProject>> {
+  ): Promise<OperationResult<WorkspaceProject>> {
     try {
       const trimmedName = name.trim();
       const resolvedWorkingDir = path.resolve(workingDir.trim());
 
       if (!trimmedName) {
-        throw new Error("Archive name is required.");
+        throw new Error("Workspace name is required.");
       }
 
       if (!workingDir.trim()) {
@@ -134,12 +134,12 @@ export class ArchiveService {
 
       const existingEntries = await fs.readdir(resolvedWorkingDir);
       if (existingEntries.length > 0) {
-        throw new Error("The selected workspace must be empty to create a new archive.");
+        throw new Error("The selected workspace must be empty to create a new workspace.");
       }
 
       const artifactsDir = path.join(resolvedWorkingDir, ARTIFACTS_DIRECTORY_NAME);
       const manifestPath = path.join(resolvedWorkingDir, MANIFEST_FILE_NAME);
-      const zipPath = path.join(artifactsDir, `${buildArchiveSlug(trimmedName)}.zip`);
+      const zipPath = path.join(artifactsDir, `${buildWorkspaceSlug(trimmedName)}.zip`);
       const now = new Date().toISOString();
 
       await fs.mkdir(artifactsDir, { recursive: true });
@@ -155,7 +155,7 @@ export class ArchiveService {
         throw toErrorMessage(gitResult.error);
       }
 
-      const archive: ArchiveProject = {
+      const workspace: WorkspaceProject = {
         id: randomUUID(),
         name: trimmedName,
         description: description?.trim() || undefined,
@@ -164,23 +164,23 @@ export class ArchiveService {
         artifactsDir,
         gitBranch: "main",
         manifestPath,
-        state: ArchiveState.Empty,
+        state: WorkspaceState.Empty,
         createdAt: now,
         lastModifiedAt: now,
       };
 
-      return { ok: true, data: archive };
+      return { ok: true, data: workspace };
     } catch (error) {
       return { ok: false, error };
     }
   }
 
   /**
-   * Open an existing archive from a working directory
+    * Open an existing workspace from a working directory
    */
-  async openArchive(
+  async openWorkspace(
     workingDir: string
-  ): Promise<OperationResult<ArchiveProject>> {
+  ): Promise<OperationResult<WorkspaceProject>> {
     try {
       const resolvedWorkingDir = path.resolve(workingDir.trim());
 
@@ -194,7 +194,7 @@ export class ArchiveService {
       try {
         await fs.access(manifestPath);
       } catch {
-        throw new Error("No manifest.xml found — this directory is not an OMEX archive workspace.");
+        throw new Error("No manifest.xml found — this directory is not an OMEX workspace.");
       }
 
       const gitDir = path.join(resolvedWorkingDir, ".git");
@@ -206,7 +206,7 @@ export class ArchiveService {
 
       const artifactsDir = path.join(resolvedWorkingDir, ARTIFACTS_DIRECTORY_NAME);
       const name = path.basename(resolvedWorkingDir);
-      const zipPath = path.join(artifactsDir, `${buildArchiveSlug(name)}.zip`);
+      const zipPath = path.join(artifactsDir, `${buildWorkspaceSlug(name)}.zip`);
 
       let gitBranch = "main";
       let gitRepoUrl: string | undefined;
@@ -232,7 +232,7 @@ export class ArchiveService {
       const manifestStats = await fs.stat(manifestPath);
       const dirStats = await fs.stat(resolvedWorkingDir);
 
-      const archive: ArchiveProject = {
+      const workspace: WorkspaceProject = {
         id: randomUUID(),
         name,
         workingDir: resolvedWorkingDir,
@@ -241,22 +241,22 @@ export class ArchiveService {
         gitRepoUrl,
         gitBranch,
         manifestPath,
-        state: ArchiveState.WorkingTreeDirty,
+        state: WorkspaceState.WorkingTreeDirty,
         createdAt: dirStats.birthtime.toISOString(),
         lastModifiedAt: manifestStats.mtime.toISOString(),
       };
 
-      return { ok: true, data: archive };
+      return { ok: true, data: workspace };
     } catch (error) {
       return { ok: false, error };
     }
   }
 
   /**
-   * Import files from filesystem into archive working tree
+    * Import files from filesystem into workspace working tree
    */
   async importFiles(
-    archive: ArchiveProject,
+    archive: WorkspaceProject,
     sourceFiles: string[],
     overwriteExisting = false
   ): Promise<OperationResult<WorkingTreeFile[]>> {
@@ -357,7 +357,7 @@ export class ArchiveService {
       }
 
       importedEntries.sort((left, right) => left.path.localeCompare(right.path));
-      archive.state = ArchiveState.WorkingTreeDirty;
+      archive.state = WorkspaceState.WorkingTreeDirty;
       archive.lastModifiedAt = new Date().toISOString();
 
       return { ok: true, data: importedEntries };
@@ -370,7 +370,7 @@ export class ArchiveService {
    * List files in working tree
    */
   async listFiles(
-    archive: ArchiveProject
+    archive: WorkspaceProject
   ): Promise<OperationResult<WorkingTreeFile[]>> {
     try {
       const excludedDirectories = new Set<string>([
@@ -409,7 +409,7 @@ export class ArchiveService {
    * Delete a file or directory from working tree
    */
   async deleteFile(
-    archive: ArchiveProject,
+    archive: WorkspaceProject,
     filePath: string
   ): Promise<OperationResult<void>> {
     try {
@@ -423,7 +423,7 @@ export class ArchiveService {
   /**
    * Export (download) the final .zip artifact
    */
-  async exportZip(archive: ArchiveProject): Promise<OperationResult<string>> {
+  async exportZip(archive: WorkspaceProject): Promise<OperationResult<string>> {
     try {
       // TODO: Implementation
       // Returns path to .zip file
@@ -434,4 +434,4 @@ export class ArchiveService {
   }
 }
 
-export const archiveService = new ArchiveService();
+export const workspaceService = new WorkspaceService();
