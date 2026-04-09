@@ -16,12 +16,22 @@ const addDirectoryToZip = async (
   const entries = await fs.readdir(dirPath, { withFileTypes: true });
 
   for (const entry of entries) {
-    if (excludeSet.has(entry.name)) {
-      continue;
-    }
-
     const absolutePath = path.join(dirPath, entry.name);
     const archivePath = zipPrefix ? `${zipPrefix}/${entry.name}` : entry.name;
+    const normalizedArchivePath = archivePath.replace(/\\/g, "/").replace(/^\.\//, "");
+
+    if (
+      excludeSet.has(entry.name) ||
+      excludeSet.has(normalizedArchivePath) ||
+      excludeSet.has(`./${normalizedArchivePath}`) ||
+      Array.from(excludeSet).some(
+        (excludedPath) =>
+          excludedPath.endsWith("/") &&
+          (normalizedArchivePath === excludedPath.slice(0, -1) || normalizedArchivePath.startsWith(excludedPath))
+      )
+    ) {
+      continue;
+    }
 
     if (entry.isDirectory()) {
       await addDirectoryToZip(zip, absolutePath, archivePath, excludeSet);
@@ -51,11 +61,12 @@ export class ZipService {
       const resolvedWorkingDir = path.resolve(workingDir);
       const resolvedOutputPath = path.resolve(outputPath);
 
+      const normalizeExclude = (value: string) => value.replace(/\\/g, "/").replace(/^\.\//, "");
       const excludeSet = new Set<string>([
         ".git",
         ".omex-artifacts",
         ...(excludePaths ?? []),
-      ]);
+      ].map(normalizeExclude));
 
       const zip = new JSZip();
       await addDirectoryToZip(zip, resolvedWorkingDir, "", excludeSet);

@@ -11,6 +11,7 @@ import {
   CommitSuggestion,
   OperationResult,
   CommitIntent,
+  WorkspaceGitSnapshot,
 } from "../domain/models";
 
 export class GitService {
@@ -94,6 +95,71 @@ export class GitService {
       return {
         ok: true,
         data: { added, modified, deleted },
+      };
+    } catch (error) {
+      return { ok: false, error };
+    }
+  }
+
+  async getWorkspaceSnapshot(
+    workspace: WorkspaceProject
+  ): Promise<OperationResult<WorkspaceGitSnapshot>> {
+    try {
+      const dir = path.resolve(workspace.workingDir);
+      const matrix = await git.statusMatrix({ fs, dir });
+      const hasUncommittedChanges = matrix.some(([filePath, head, workdir]) => {
+        if (filePath.startsWith(".git/")) {
+          return false;
+        }
+
+        return head !== workdir;
+      });
+
+      let gitBranch: string | undefined;
+      let gitRevision: string | undefined;
+      let gitRepoUrl: string | undefined;
+
+      try {
+        const branch = await git.currentBranch({ fs, dir });
+        if (branch) {
+          gitBranch = branch;
+        }
+      } catch {
+        // Optional metadata only.
+      }
+
+      try {
+        const revision = await git.resolveRef({ fs, dir, ref: "HEAD" });
+        if (revision) {
+          gitRevision = revision;
+        }
+      } catch {
+        // Optional metadata only.
+      }
+
+      try {
+        const remotes = await git.listRemotes({ fs, dir });
+        const preferredRemote =
+          remotes.find((remote) => remote.remote === "origin") ??
+          remotes.find((remote) => /github\.com/i.test(remote.url)) ??
+          remotes[0];
+
+        if (preferredRemote?.url) {
+          gitRepoUrl = preferredRemote.url;
+        }
+      } catch {
+        // Optional metadata only.
+      }
+
+      return {
+        ok: true,
+        data: {
+          capturedAt: new Date().toISOString(),
+          gitBranch,
+          gitRevision,
+          gitRepoUrl,
+          hasUncommittedChanges,
+        },
       };
     } catch (error) {
       return { ok: false, error };

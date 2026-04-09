@@ -25,8 +25,8 @@ contextBridge.exposeInMainWorld("api", {
   manifest: {
     parse: (manifestPath: string) =>
       ipcRenderer.invoke("manifest:parse", manifestPath),
-    generate: (manifestPath: string, entries: any[]) =>
-      ipcRenderer.invoke("manifest:generate", manifestPath, entries),
+    generate: (manifestPath: string, entries: any[], metadata?: any) =>
+      ipcRenderer.invoke("manifest:generate", manifestPath, entries, metadata),
     upsertEntry: (manifestPath: string, entry: any) =>
       ipcRenderer.invoke("manifest:upsertEntry", manifestPath, entry),
     deleteEntry: (manifestPath: string, location: string) =>
@@ -43,6 +43,8 @@ contextBridge.exposeInMainWorld("api", {
       ipcRenderer.invoke("git:initRepository", workingDir, gitignoreRules),
     detectChanges: (workspace: any) =>
       ipcRenderer.invoke("git:detectChanges", workspace),
+    getWorkspaceSnapshot: (workspace: any) =>
+      ipcRenderer.invoke("git:getWorkspaceSnapshot", workspace),
     suggestCommitMessage: (changes: any) =>
       ipcRenderer.invoke("git:suggestCommitMessage", changes),
     commit: (workspace: any, message: string) =>
@@ -103,8 +105,6 @@ contextBridge.exposeInMainWorld("api", {
       ipcRenderer.invoke("ui:pickImportPaths", defaultPath),
     pickImportDirectory: (defaultPath?: string) =>
       ipcRenderer.invoke("ui:pickImportDirectory", defaultPath),
-    pickSaveZipPath: (defaultPath?: string) =>
-      ipcRenderer.invoke("ui:pickSaveZipPath", defaultPath),
     openExternal: (url: string) => ipcRenderer.invoke("ui:openExternal", url),
     confirmImportOverwrite: (collisionNames: string[]) =>
       ipcRenderer.invoke("ui:confirmImportOverwrite", collisionNames),
@@ -112,6 +112,8 @@ contextBridge.exposeInMainWorld("api", {
       ipcRenderer.invoke("ui:selectGitHubRepository", repositoryNames),
     confirmPrivateRepository: () =>
       ipcRenderer.invoke("ui:confirmPrivateRepository"),
+    confirmBuildWithUncommittedChanges: (pendingSummary: string) =>
+      ipcRenderer.invoke("ui:confirmBuildWithUncommittedChanges", pendingSummary),
     getPathForFile: (file: File) => webUtils.getPathForFile(file),
   },
 

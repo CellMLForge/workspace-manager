@@ -5,6 +5,7 @@
 import { BrowserWindow, dialog, ipcMain, shell } from "electron";
 import type { OpenDialogOptions } from "electron";
 import {
+  ManifestBuildMetadata,
   WorkspaceProject,
   GitHubSession,
   ManifestEntry,
@@ -61,8 +62,8 @@ ipcMain.handle("manifest:parse", async (event, manifestPath: string) => {
 
 ipcMain.handle(
   "manifest:generate",
-  async (event, manifestPath: string, entries: ManifestEntry[]) => {
-    return manifestService.generateManifest(manifestPath, entries);
+  async (event, manifestPath: string, entries: ManifestEntry[], metadata?: ManifestBuildMetadata) => {
+    return manifestService.generateManifest(manifestPath, entries, metadata);
   }
 );
 
@@ -111,6 +112,13 @@ ipcMain.handle(
 ipcMain.handle("git:suggestCommitMessage", async (event, changes) => {
   return gitService.suggestCommitMessage(changes);
 });
+
+ipcMain.handle(
+  "git:getWorkspaceSnapshot",
+  async (event, workspace: WorkspaceProject) => {
+    return gitService.getWorkspaceSnapshot(workspace);
+  }
+);
 
 ipcMain.handle(
   "git:commit",
@@ -296,27 +304,6 @@ ipcMain.handle("ui:pickImportDirectory", async (event, defaultPath?: string) => 
   return result.filePaths[0];
 });
 
-ipcMain.handle("ui:pickSaveZipPath", async (event, defaultPath?: string) => {
-  const parentWindow = BrowserWindow.fromWebContents(event.sender) ?? undefined;
-  const result = parentWindow
-    ? await dialog.showSaveDialog(parentWindow, {
-        title: "Save OMEX zip archive",
-        defaultPath,
-        filters: [{ name: "Zip Archive", extensions: ["zip"] }],
-      })
-    : await dialog.showSaveDialog({
-        title: "Save OMEX zip archive",
-        defaultPath,
-        filters: [{ name: "Zip Archive", extensions: ["zip"] }],
-      });
-
-  if (result.canceled || !result.filePath) {
-    return null;
-  }
-
-  return result.filePath;
-});
-
 ipcMain.handle("ui:openExternal", async (event, url: string) => {
   await shell.openExternal(url);
 });
@@ -401,3 +388,27 @@ ipcMain.handle("ui:confirmPrivateRepository", async (event) => {
 
   return result.response === 0;
 });
+
+ipcMain.handle(
+  "ui:confirmBuildWithUncommittedChanges",
+  async (event, pendingSummary: string) => {
+    const parentWindow = BrowserWindow.fromWebContents(event.sender) ?? undefined;
+
+    const options = {
+      type: "warning" as const,
+      buttons: ["Build ZIP anyway", "Cancel"],
+      defaultId: 1,
+      cancelId: 1,
+      noLink: true,
+      title: "Uncommitted changes detected",
+      message: "This workspace has uncommitted changes.",
+      detail: `${pendingSummary}\n\nIt is recommended to commit changes before creating a ZIP artifact.`,
+    };
+
+    const result = parentWindow
+      ? await dialog.showMessageBox(parentWindow, options)
+      : await dialog.showMessageBox(options);
+
+    return result.response === 0;
+  }
+);

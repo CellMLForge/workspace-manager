@@ -23,11 +23,13 @@ interface RendererApi {
     parse: (manifestPath: string) => Promise<IpcResult<import("@domain/models").ManifestEntry[]>>;
     generate: (
       manifestPath: string,
-      entries: import("@domain/models").ManifestEntry[]
+      entries: import("@domain/models").ManifestEntry[],
+      metadata?: import("@domain/models").ManifestBuildMetadata
     ) => Promise<IpcResult<void>>;
   };
   git: {
     detectChanges: (workspace: import("@domain/models").WorkspaceProject) => Promise<IpcResult<import("@domain/models").GitChangeSet>>;
+    getWorkspaceSnapshot: (workspace: import("@domain/models").WorkspaceProject) => Promise<IpcResult<import("@domain/models").WorkspaceGitSnapshot>>;
     suggestCommitMessage: (changes: import("@domain/models").GitChangeSet) => Promise<IpcResult<import("@domain/models").CommitSuggestion>>;
     commit: (workspace: import("@domain/models").WorkspaceProject, message: string) => Promise<IpcResult<string>>;
   };
@@ -73,11 +75,11 @@ interface RendererApi {
     pickDirectory: (defaultPath?: string) => Promise<string | null>;
     pickImportPaths: (defaultPath?: string) => Promise<string[]>;
     pickImportDirectory: (defaultPath?: string) => Promise<string | null>;
-    pickSaveZipPath: (defaultPath?: string) => Promise<string | null>;
     openExternal: (url: string) => Promise<void>;
     confirmImportOverwrite: (collisionNames: string[]) => Promise<boolean>;
     selectGitHubRepository: (repositoryNames: string[]) => Promise<number | null>;
     confirmPrivateRepository: () => Promise<boolean | null>;
+    confirmBuildWithUncommittedChanges: (pendingSummary: string) => Promise<boolean>;
     getPathForFile: (file: File) => string;
   };
   events: {

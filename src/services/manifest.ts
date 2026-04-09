@@ -4,11 +4,14 @@
 import { promises as fs } from "fs";
 import { create } from "xmlbuilder2";
 import {
+  ManifestBuildMetadata,
   ManifestEntry,
   OperationResult,
 } from "../domain/models";
 
 const MANIFEST_NS = "http://identifiers.org/combine.specifications/omex-manifest";
+const RDF_NS = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+const CELLMLFORGE_NS = "https://cellmlforge.org/ns/workspace#";
 
 const normalizeManifestLocation = (location: string) => {
   const trimmed = location.trim();
@@ -49,7 +52,8 @@ export class ManifestService {
    */
   async generateManifest(
     manifestPath: string,
-    entries: ManifestEntry[]
+    entries: ManifestEntry[],
+    metadata?: ManifestBuildMetadata
   ): Promise<OperationResult<void>> {
     try {
       const seenLocations = new Set<string>();
@@ -108,6 +112,39 @@ export class ManifestService {
         }
 
         document.ele("content", attributes).up();
+      }
+
+      if (metadata) {
+        const metadataNode = document.ele("metadata");
+        const rdfNode = metadataNode.ele("rdf:RDF", {
+          "xmlns:rdf": RDF_NS,
+          "xmlns:cellmlforge": CELLMLFORGE_NS,
+        });
+
+        const descriptionNode = rdfNode.ele("rdf:Description", {
+          "rdf:about": ".",
+        });
+
+        descriptionNode
+          .ele("cellmlforge:hasUncommittedChanges")
+          .txt(String(metadata.hasUncommittedChanges))
+          .up();
+
+        if (metadata.gitBranch) {
+          descriptionNode.ele("cellmlforge:gitBranch").txt(metadata.gitBranch).up();
+        }
+
+        if (metadata.gitRevision) {
+          descriptionNode.ele("cellmlforge:gitRevision").txt(metadata.gitRevision).up();
+        }
+
+        if (metadata.gitRepoUrl) {
+          descriptionNode.ele("cellmlforge:gitRepository").txt(metadata.gitRepoUrl).up();
+        }
+
+        descriptionNode.up();
+        rdfNode.up();
+        metadataNode.up();
       }
 
       const xml = document.end({ prettyPrint: true });

@@ -22,7 +22,7 @@ const error = ref<string | null>(null);
 const info = ref<string | null>(null);
 const workspaceName = ref("My Workspace");
 const workingPath = ref("C:/tmp/omex-workspace");
-const zipOutputPath = ref("C:/tmp/omex-workspace.zip");
+const zipArchiveName = ref("omex-workspace.zip");
 const openCorLaunchUrl = ref<string | null>(null);
 const files = ref<WorkingTreeFile[]>([]);
 const changeSet = ref<GitChangeSet | null>(null);
@@ -325,6 +325,41 @@ const fileNameFromPath = (value: string) => {
   return index >= 0 ? normalized.slice(index + 1) : normalized;
 };
 
+const normalizeZipArchiveName = (input: string, fallbackWorkspaceName: string) => {
+  const fallbackStem = fallbackWorkspaceName
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "") || "omex-workspace";
+
+  const trimmed = input.trim();
+  const withoutExtension = trimmed.replace(/\.zip$/i, "");
+  const sanitizedStem = withoutExtension
+    .replace(/[\\/:*?"<>|]+/g, "-")
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "");
+
+  return `${sanitizedStem || fallbackStem}.zip`;
+};
+
+const buildZipTargetPath = (artifactsDir: string, archiveName: string) => {
+  const separator = artifactsDir.includes("\\") ? "\\" : "/";
+  const normalizedDir = artifactsDir.replace(/[\\/]+$/, "");
+  return `${normalizedDir}${separator}${archiveName}`;
+};
+
+const collectManifestEntries = (): ManifestEntry[] => {
+  return files.value
+    .filter((file) => !file.isDirectory)
+    .filter((file) => !isFileExcludedFromManifest(file))
+    .map((file) => ({
+      location: `./${file.path}`,
+      format: manifestFormatForFile(file),
+      master: isMasterForFile(file.path),
+    }));
+};
+
 const defaultManifestFormatForPath = (relativePath: string) => {
   const lower = relativePath.toLowerCase();
   const baseName = lower.split("/").pop() ?? lower;
@@ -428,14 +463,7 @@ const applyManifestSelections = async () => {
     return;
   }
 
-  const entries: ManifestEntry[] = files.value
-    .filter((file) => !file.isDirectory)
-    .filter((file) => !isFileExcludedFromManifest(file))
-    .map((file) => ({
-      location: `./${file.path}`,
-      format: manifestFormatForFile(file),
-      master: isMasterForFile(file.path),
-    }));
+  const entries = collectManifestEntries();
 
   const result = await window.api.manifest.generate(currentWorkspace.value.manifestPath, entries);
   if (!result.ok) {
@@ -637,7 +665,7 @@ const handleSyncToGitHub = async () => {
 const bootstrapWorkspaceContext = async (workspace: WorkspaceProject) => {
   currentWorkspace.value = workspace;
   workingPath.value = workspace.workingDir;
-  zipOutputPath.value = workspace.zipPath;
+  zipArchiveName.value = normalizeZipArchiveName(fileNameFromPath(workspace.zipPath), workspace.name);
   openCorLaunchUrl.value = null;
   info.value = `Workspace loaded at ${workspace.workingDir}`;
   await refreshFiles();
@@ -936,18 +964,6 @@ const pickImportDirectory = async () => {
   await importFiles([sourcePath]);
 };
 
-const pickZipOutputPath = async () => {
-  if (!window.api?.ui?.pickSaveZipPath) {
-    error.value = "Native save dialog API not available";
-    return;
-  }
-
-  const selectedPath = await window.api.ui.pickSaveZipPath(zipOutputPath.value);
-  if (selectedPath) {
-    zipOutputPath.value = selectedPath;
-  }
-};
-
 const handleExportZip = async () => {
   if (!currentWorkspace.value) {
     error.value = "Load or create a workspace before exporting.";
@@ -959,11 +975,19 @@ const handleExportZip = async () => {
     return;
   }
 
-  const targetPath = zipOutputPath.value.trim();
-  if (!targetPath) {
-    error.value = "Choose a ZIP output path before exporting.";
+  const normalizedArchiveName = normalizeZipArchiveName(zipArchiveName.value, currentWorkspace.value.name);
+  zipArchiveName.value = normalizedArchiveName;
+
+  const targetPath = buildZipTargetPath(currentWorkspace.value.artifactsDir, normalizedArchiveName);
+  if (!targetPath.trim()) {
+    error.value = "Invalid ZIP archive name.";
     return;
   }
+
+  currentWorkspace.value = {
+    ...currentWorkspace.value,
+    zipPath: targetPath,
+  };
 
   exporting.value = true;
   error.value = null;
@@ -971,10 +995,70 @@ const handleExportZip = async () => {
   openCorLaunchUrl.value = null;
 
   try {
+    const snapshotResult = window.api?.git?.getWorkspaceSnapshot
+      ? await window.api.git.getWorkspaceSnapshot(toRaw(currentWorkspace.value)!)
+      : await window.api.git.detectChanges(toRaw(currentWorkspace.value)!);
+
+    if (!snapshotResult?.ok || !snapshotResult.data) {
+      error.value = String(snapshotResult?.error ?? "Unable to inspect git workspace state before ZIP build");
+      return;
+    }
+
+    const hasUncommittedChanges = "hasUncommittedChanges" in snapshotResult.data
+      ? Boolean(snapshotResult.data.hasUncommittedChanges)
+      : (snapshotResult.data.added.length + snapshotResult.data.modified.length + snapshotResult.data.deleted.length) > 0;
+
+    if (hasUncommittedChanges) {
+      let shouldProceed = false;
+      const pendingSummary = changeSet.value
+        ? summarizeChanges(changeSet.value)
+        : "Uncommitted changes are present in the workspace.";
+
+      if (window.api?.ui?.confirmBuildWithUncommittedChanges) {
+        shouldProceed = await window.api.ui.confirmBuildWithUncommittedChanges(pendingSummary);
+      } else {
+        shouldProceed = window.confirm(
+          `Uncommitted changes detected (${pendingSummary}). Build ZIP anyway?`
+        );
+      }
+
+      if (!shouldProceed) {
+        info.value = "ZIP build cancelled so you can commit changes first.";
+        return;
+      }
+    }
+
+    const metadata = {
+      generatedAt: new Date().toISOString(),
+      hasUncommittedChanges,
+      gitBranch: "gitBranch" in snapshotResult.data ? snapshotResult.data.gitBranch : undefined,
+      gitRevision: "gitRevision" in snapshotResult.data ? snapshotResult.data.gitRevision : undefined,
+      gitRepoUrl:
+        currentWorkspace.value.gitRepoUrl ||
+        ("gitRepoUrl" in snapshotResult.data ? snapshotResult.data.gitRepoUrl : undefined),
+    };
+
+    const manifestEntries = collectManifestEntries();
+    const manifestResult = await window.api.manifest.generate(
+      currentWorkspace.value.manifestPath,
+      manifestEntries,
+      metadata
+    );
+    if (!manifestResult.ok) {
+      error.value = String(manifestResult.error ?? "Failed to update manifest.xml before ZIP build");
+      return;
+    }
+
+    const excludedWorkspacePaths = files.value
+      .filter((file) => !file.isDirectory)
+      .filter((file) => isFileExcludedFromManifest(file))
+      .map((file) => file.path);
+
     const result = await window.api.zip.build(currentWorkspace.value.workingDir, targetPath, [
       ".git",
       "node_modules",
       "dist",
+      ...excludedWorkspacePaths,
     ]);
 
     if (!result.ok) {
@@ -1612,23 +1696,15 @@ onBeforeUnmount(() => {
           <template #title>Artifacts</template>
           <template #content>
             <div class="field-grid compact">
-              <label class="field-label" for="zipOutputPath">ZIP output path</label>
-              <div
-                class="input-row input-row--interactive"
-                role="button"
-                tabindex="0"
-                @click="pickZipOutputPath"
-                @keydown.enter.prevent="pickZipOutputPath"
-                @keydown.space.prevent="pickZipOutputPath"
-              >
+              <label class="field-label" for="zipArchiveName">Archive file name</label>
+              <div class="input-row">
                 <input
-                  id="zipOutputPath"
-                  v-model="zipOutputPath"
-                  class="field-input field-input--readonly"
+                  id="zipArchiveName"
+                  v-model="zipArchiveName"
+                  class="field-input"
                   type="text"
-                  readonly
+                  placeholder="my-workspace.zip"
                 />
-                <PButton label="Save As..." severity="secondary" text @click.stop="pickZipOutputPath" />
                 <PButton
                   label="Build ZIP"
                   icon="pi pi-file-export"

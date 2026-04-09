@@ -27,6 +27,14 @@ export interface ManifestEntry {
   checksum?: string; // optional: SHA256 or similar
 }
 
+export interface ManifestBuildMetadata {
+  generatedAt?: string; // ISO 8601 timestamp
+  gitBranch?: string;
+  gitRevision?: string;
+  gitRepoUrl?: string;
+  hasUncommittedChanges: boolean;
+}
+
 // Represents a workspace working tree
 export interface WorkspaceProject {
   id: string; // UUID
@@ -104,6 +112,14 @@ export interface PushContext {
   repoUrl: string;
   branch: string;
   isNewRepo: boolean; // true if creating new repo on GitHub
+}
+
+export interface WorkspaceGitSnapshot {
+  capturedAt: string; // ISO 8601 timestamp
+  gitBranch?: string;
+  gitRevision?: string;
+  gitRepoUrl?: string;
+  hasUncommittedChanges: boolean;
 }
 
 // Operation result wrapper
