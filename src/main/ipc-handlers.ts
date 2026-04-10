@@ -160,9 +160,15 @@ ipcMain.handle(
  * GitHub operation handlers
  */
 ipcMain.handle("github:authenticateOAuth", async (event) => {
-  return githubService.authenticateOAuth((authEvent) => {
+  const result = await githubService.authenticateOAuth((authEvent) => {
     event.sender.send("github:auth-progress", authEvent);
   });
+
+  if (result.ok && result.data) {
+    gitService.setCommitAuthorFromGitHubSession(result.data);
+  }
+
+  return result;
 });
 
 ipcMain.handle("github:cancelAuth", async () => {
@@ -174,11 +180,19 @@ ipcMain.handle("github:getOAuthApplicationId", async () => {
 });
 
 ipcMain.handle("github:restoreSession", async () => {
-  return githubService.restoreSession();
+  const result = await githubService.restoreSession();
+  if (result.ok) {
+    gitService.setCommitAuthorFromGitHubSession(result.data ?? null);
+  }
+  return result;
 });
 
 ipcMain.handle("github:logout", async () => {
-  return githubService.logout();
+  const result = await githubService.logout();
+  if (result.ok) {
+    gitService.setCommitAuthorFromGitHubSession(null);
+  }
+  return result;
 });
 
 ipcMain.handle("github:listRepositories", async (event, session: GitHubSession) => {

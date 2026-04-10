@@ -7,7 +7,7 @@ import * as path from "path";
 import * as git from "isomorphic-git";
 import http from "isomorphic-git/http/node";
 import https from "https";
-import { dialog, safeStorage, shell } from "electron";
+import { clipboard, dialog, safeStorage, shell } from "electron";
 import { GitHubSession, OperationResult, PushContext } from "../domain/models";
 import { Octokit } from "@octokit/rest";
 import { githubAuthConfig } from "./github-config";
@@ -198,6 +198,8 @@ export class GitHubService {
     const session: GitHubSession = {
       accessToken,
       username: profile.data.login,
+      displayName: profile.data.name ?? undefined,
+      email: profile.data.email ?? undefined,
       avatarUrl: profile.data.avatar_url,
       scope: [],
     };
@@ -252,31 +254,49 @@ export class GitHubService {
 
       onProgress?.({
         stage: "device_code",
-        message: "GitHub device code received.",
+        message: "GitHub device code received. Copy it now. If needed later, check the Activity log.",
         userCode,
         verificationUri,
         verificationUriComplete: verificationUriComplete || undefined,
       });
 
-      const dialogResult = await dialog.showMessageBox({
-        type: "info",
-        buttons: ["Continue", "Cancel"],
-        defaultId: 0,
-        cancelId: 1,
-        noLink: true,
-        title: "Authorize GitHub device",
-        message: "Complete GitHub sign-in",
-        detail: [
-          `Code: ${userCode || "(not provided)"}`,
-          `Verification URL: ${verificationUri}`,
-          "",
-          "A browser window will open for authorization.",
-          "If prompted for a device code, enter the code shown above.",
-        ].join("\n"),
-      });
+      while (true) {
+        const dialogResult = await dialog.showMessageBox({
+          type: "info",
+          buttons: ["Copy code", "Continue", "Cancel"],
+          defaultId: 1,
+          cancelId: 2,
+          noLink: true,
+          title: "Complete GitHub sign-in",
+          message: "Copy your device code before opening the browser",
+          detail: [
+            `Code: ${userCode || "(not provided)"}`,
+            `Verification URL: ${verificationUri}`,
+            "",
+            "Tip: use Copy code now, then Continue.",
+            "If you forget the code, open the Activity log and copy it from there.",
+          ].join("\n"),
+        });
 
-      if (dialogResult.response === 1 || abort.cancelled) {
-        throw new Error("GitHub sign-in was cancelled.");
+        if (dialogResult.response === 2 || abort.cancelled) {
+          throw new Error("GitHub sign-in was cancelled.");
+        }
+
+        if (dialogResult.response === 0) {
+          if (userCode) {
+            clipboard.writeText(userCode);
+            onProgress?.({
+              stage: "device_code",
+              message: "Device code copied to clipboard. Continue to open the GitHub authorization page.",
+              userCode,
+              verificationUri,
+              verificationUriComplete: verificationUriComplete || undefined,
+            });
+          }
+          continue;
+        }
+
+        break;
       }
 
       try {

@@ -309,6 +309,19 @@ const summarizeChanges = (changes: GitChangeSet) => {
   return `Added ${added}, Modified ${modified}, Deleted ${deleted}`;
 };
 
+const getCommitterLabel = () => {
+  const session = githubSession.value;
+  if (!session?.username) {
+    return "CellMLForge Workspace Manager <workspace-manager@cellmlforge.local>";
+  }
+
+  const name = (session.displayName || session.username).trim();
+  const email = (session.email || `${session.username}@users.noreply.github.com`).trim();
+  return `${name} <${email}>`;
+};
+
+const isUsingFallbackCommitter = () => !githubSession.value?.username;
+
 const extensionFromPath = (relativePath: string) => {
   const lower = relativePath.toLowerCase();
   const extensionIndex = lower.lastIndexOf(".");
@@ -1750,6 +1763,19 @@ onBeforeUnmount(() => {
         <PCard>
           <template #title>Commit assistant</template>
           <template #content>
+            <p class="committer-indicator" :class="{ 'committer-indicator--warning': isUsingFallbackCommitter() }">
+              <strong>Committer:</strong> {{ getCommitterLabel() }}
+              <span v-if="isUsingFallbackCommitter()"> (local fallback)</span>
+              <button
+                v-if="isUsingFallbackCommitter()"
+                type="button"
+                class="committer-signin-link"
+                :disabled="loading || isAuthenticating"
+                @click="handleGitHubLogin"
+              >
+                Sign in with GitHub
+              </button>
+            </p>
             <div v-if="!commitSuggestion" class="empty-state">No commit suggestion available yet.</div>
             <div v-else class="suggestion-block">
               <p><strong>Suggested message:</strong> {{ commitSuggestion.defaultMessage }}</p>
@@ -2202,6 +2228,34 @@ h1 {
 
 .status-list strong {
   margin-right: 0.4rem;
+}
+
+.committer-indicator {
+  margin: 0 0 0.8rem;
+  color: #4d5f75;
+}
+
+.committer-indicator--warning {
+  color: #8a3c00;
+  font-weight: 600;
+}
+
+.committer-signin-link {
+  margin-left: 0.45rem;
+  border: 0;
+  background: transparent;
+  color: #1b6fd1;
+  text-decoration: underline;
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 600;
+  padding: 0;
+}
+
+.committer-signin-link:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+  text-decoration: none;
 }
 
 .modal-backdrop {

@@ -6,6 +6,7 @@ import { promises as fsPromises } from "fs";
 import * as path from "path";
 import * as git from "isomorphic-git";
 import {
+  GitHubSession,
   WorkspaceProject,
   GitChangeSet,
   CommitSuggestion,
@@ -14,7 +15,33 @@ import {
   WorkspaceGitSnapshot,
 } from "../domain/models";
 
+type CommitAuthor = {
+  name: string;
+  email: string;
+};
+
 export class GitService {
+  private commitAuthor: CommitAuthor = {
+    name: "CellMLForge Workspace Manager",
+    email: "workspace-manager@cellmlforge.local",
+  };
+
+  setCommitAuthorFromGitHubSession(session: GitHubSession | null) {
+    if (!session?.username) {
+      this.commitAuthor = {
+        name: "CellMLForge Workspace Manager",
+        email: "workspace-manager@cellmlforge.local",
+      };
+      return;
+    }
+
+    const derivedEmail = session.email?.trim() || `${session.username}@users.noreply.github.com`;
+    this.commitAuthor = {
+      name: session.displayName?.trim() || session.username,
+      email: derivedEmail,
+    };
+  }
+
   /**
    * Initialize a git repository in working directory
    */
@@ -248,10 +275,7 @@ export class GitService {
         fs,
         dir,
         message: trimmedMessage,
-        author: {
-          name: "CellMLForge Workspace Manager",
-          email: "workspace-manager@cellmlforge.local",
-        },
+        author: this.commitAuthor,
       });
 
       return { ok: true, data: oid };

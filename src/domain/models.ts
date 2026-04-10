@@ -96,6 +96,8 @@ export interface GitHubSession {
   refreshToken?: string;
   expiresAt?: string; // ISO 8601
   username: string;
+  displayName?: string;
+  email?: string;
   avatarUrl: string;
   scope: string[]; // permissions granted
 }
