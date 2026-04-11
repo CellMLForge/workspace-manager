@@ -21,14 +21,18 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 20
+          cache: npm
+
+      - name: Verify dependency lockfile is in sync
+        run: npm ci
 
       - name: Validate requested version
         env:
@@ -68,7 +72,7 @@ jobs:
           fi
 
       - name: Ensure release does not already exist
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         env:
           TAG: ${{ env.TAG }}
         with:
@@ -97,6 +101,9 @@ jobs:
           VERSION: ${{ env.VERSION }}
         run: npm version "$VERSION" --no-git-tag-version
 
+      - name: Verify lockfile after version bump
+        run: npm ci
+
       - name: Commit version bump
         env:
           TAG: ${{ env.TAG }}
@@ -117,7 +124,7 @@ jobs:
           git push origin "$TAG"
 
       - name: Create draft GitHub release
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         env:
           VERSION: ${{ env.VERSION }}
           TAG: ${{ env.TAG }}
