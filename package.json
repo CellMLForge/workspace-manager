@@ -1,6 +1,6 @@
 {
   "name": "cellmlforge-workspace-manager",
-  "version": "0.1.1-alpha.3",
+  "version": "0.1.1-alpha.4",
   "description": "CellMLForge Workspace Manager - Desktop app for managing OMEX/COMBINE archives with git integration and GitHub push",
   "main": "dist/main/main.js",
   "homepage": "./",
