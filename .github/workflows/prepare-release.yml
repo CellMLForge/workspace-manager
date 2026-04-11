@@ -1,0 +1,149 @@
+name: Prepare Draft Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: SemVer version to release, for example 0.2.0
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: prepare-release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  prepare-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Validate requested version
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          set -euo pipefail
+
+          if [[ ! "$INPUT_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*|[0-9A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9A-Za-z-][0-9A-Za-z-]*))*))?(\+([0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*))?$ ]]; then
+            echo "Version must be valid semver, for example 1.2.3 or 1.2.3-beta.1" >&2
+            exit 1
+          fi
+
+          CURRENT_VERSION=$(node -p "require('./package.json').version")
+          if [[ "$CURRENT_VERSION" == "$INPUT_VERSION" ]]; then
+            echo "package.json is already at version $INPUT_VERSION" >&2
+            exit 1
+          fi
+
+          echo "VERSION=$INPUT_VERSION" >> "$GITHUB_ENV"
+          echo "TAG=v$INPUT_VERSION" >> "$GITHUB_ENV"
+
+      - name: Ensure tag does not already exist
+        env:
+          TAG: ${{ env.TAG }}
+        run: |
+          set -euo pipefail
+          git fetch --tags --force
+
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "Tag $TAG already exists locally" >&2
+            exit 1
+          fi
+
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists on origin" >&2
+            exit 1
+          fi
+
+      - name: Ensure release does not already exist
+        uses: actions/github-script@v7
+        env:
+          TAG: ${{ env.TAG }}
+        with:
+          script: |
+            try {
+              const release = await github.rest.repos.getReleaseByTag({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                tag: process.env.TAG,
+              });
+
+              core.setFailed(`A release already exists for ${process.env.TAG}: ${release.data.html_url}`);
+            } catch (error) {
+              if (error.status !== 404) {
+                throw error;
+              }
+            }
+
+      - name: Configure git author
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Bump package version
+        env:
+          VERSION: ${{ env.VERSION }}
+        run: npm version "$VERSION" --no-git-tag-version
+
+      - name: Commit version bump
+        env:
+          TAG: ${{ env.TAG }}
+        run: |
+          set -euo pipefail
+          git add package.json package-lock.json
+          git commit -m "chore(release): $TAG"
+
+      - name: Push version bump commit
+        run: git push origin "HEAD:${GITHUB_REF_NAME}"
+
+      - name: Create and push tag
+        env:
+          TAG: ${{ env.TAG }}
+        run: |
+          set -euo pipefail
+          git tag "$TAG"
+          git push origin "$TAG"
+
+      - name: Create draft GitHub release
+        uses: actions/github-script@v7
+        env:
+          VERSION: ${{ env.VERSION }}
+          TAG: ${{ env.TAG }}
+        with:
+          script: |
+            const body = [
+              '## Release notes',
+              '',
+              `- Placeholder release notes for ${process.env.TAG}.`,
+              '- Replace this section with the actual highlights, fixes, and upgrade notes.',
+              '',
+              '## Packaging',
+              '',
+              '- Windows, macOS, and Linux distributables will be attached when this draft release is published.',
+            ].join('\n');
+
+            const release = await github.rest.repos.createRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag_name: process.env.TAG,
+              target_commitish: context.ref.replace('refs/heads/', ''),
+              name: process.env.TAG,
+              body,
+              draft: true,
+              prerelease: false,
+              generate_release_notes: false,
+            });
+
+            core.notice(`Created draft release ${release.data.html_url}`);

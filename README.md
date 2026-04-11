@@ -47,6 +47,37 @@ npm run dist
 
 Outputs platform-specific installers to the `dist/` directory.
 
+### Release Automation
+
+GitHub Actions can prepare a draft release and then build cross-platform distributables when that draft is published.
+
+#### Prepare a Draft Release
+
+Run the `Prepare Draft Release` workflow manually from the Actions tab and provide a plain semver value such as `0.2.0`.
+
+The workflow will:
+
+- validate the version string
+- confirm the tag does not already exist
+- bump `package.json` and `package-lock.json`
+- commit the version bump back to the selected branch
+- create and push tag `v<version>`
+- create a draft GitHub release with placeholder notes
+
+#### Build and Upload Release Assets
+
+After reviewing the draft notes, publish the draft release in GitHub. Publishing the release triggers the `Build Release Assets` workflow, which builds and uploads:
+
+- Windows installer and portable executable
+- macOS zip and dmg artifacts
+- Linux AppImage and tar.gz artifacts
+
+#### Repository Requirements
+
+- GitHub Actions must have permission to write repository contents
+- The target branch must allow the workflow to push the version bump commit
+- macOS builds are unsigned by default unless signing credentials are configured in GitHub Actions secrets
+
 ### Build TypeScript Only
 
 ```bash
