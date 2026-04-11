@@ -234,7 +234,7 @@ If port 3000 is in use, React will prompt for an alternative port. Update the El
 
 ## License
 
-MIT
+Apache 2.0
 
 ## Contributing
 
