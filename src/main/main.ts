@@ -4,7 +4,11 @@
 import {
   app,
   BrowserWindow,
+  clipboard,
+  dialog,
   Menu,
+  shell,
+  type MessageBoxOptions,
   type MenuItemConstructorOptions,
 } from "electron";
 import path from "path";
@@ -14,6 +18,8 @@ import "./ipc-handlers";
 
 let mainWindow: BrowserWindow | null = null;
 const isDev = !app.isPackaged;
+const REPO_URL = "https://github.com/nickerso/cellmlforge-workspace-manager";
+const NEW_ISSUE_URL = `${REPO_URL}/issues/new/choose`;
 
 const buildApplicationMenu = () => {
   const isMac = process.platform === "darwin";
@@ -58,6 +64,68 @@ const buildApplicationMenu = () => {
     { role: "editMenu" },
     { role: "viewMenu" },
     { role: "windowMenu" },
+    {
+      role: "help",
+      submenu: [
+        {
+          label: "About CellMLForge Workspace Manager",
+          click: () => {
+            const diagnosticsText = [
+              `Version: ${app.getVersion()}`,
+              `Electron: ${process.versions.electron ?? "unknown"}`,
+              `Chromium: ${process.versions.chrome ?? "unknown"}`,
+              `Node.js: ${process.versions.node ?? "unknown"}`,
+              `V8: ${process.versions.v8 ?? "unknown"}`,
+              `Platform: ${process.platform} (${process.arch})`,
+              `Mode: ${isDev ? "Development" : "Packaged"}`,
+              `Repository: ${REPO_URL}`,
+            ].join("\n");
+
+            const aboutOptions: MessageBoxOptions = {
+              type: "info",
+              title: "About CellMLForge Workspace Manager",
+              message: "CellMLForge Workspace Manager",
+              detail: [
+                diagnosticsText,
+                "Desktop app for managing OMEX/COMBINE archives with git integration.",
+              ].join("\n"),
+              buttons: ["Copy Diagnostics", "OK"],
+              defaultId: 1,
+              cancelId: 1,
+            };
+
+            const handleResult = (response: number) => {
+              if (response === 0) {
+                clipboard.writeText(diagnosticsText);
+              }
+            };
+
+            if (mainWindow) {
+              dialog
+                .showMessageBox(mainWindow, aboutOptions)
+                .then((result) => handleResult(result.response));
+            } else {
+              dialog
+                .showMessageBox(aboutOptions)
+                .then((result) => handleResult(result.response));
+            }
+          },
+        },
+        { type: "separator" },
+        {
+          label: "View GitHub Repository",
+          click: () => {
+            shell.openExternal(REPO_URL);
+          },
+        },
+        {
+          label: "Submit an Issue",
+          click: () => {
+            shell.openExternal(NEW_ISSUE_URL);
+          },
+        },
+      ],
+    },
   ];
 
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
