@@ -8,12 +8,12 @@ import {
   type MenuItemConstructorOptions,
 } from "electron";
 import path from "path";
-import isDev from "electron-is-dev";
 
 // Import IPC handlers to register all endpoints
 import "./ipc-handlers";
 
 let mainWindow: BrowserWindow | null = null;
+const isDev = !app.isPackaged;
 
 const buildApplicationMenu = () => {
   const isMac = process.platform === "darwin";
@@ -64,11 +64,9 @@ const buildApplicationMenu = () => {
 };
 
 const createWindow = () => {
-  const iconPath = process.platform === "win32"
-    ? path.join(__dirname, "../../build/icon.ico")
-    : isDev
-      ? path.join(__dirname, "../../public/branding/compact-mark.png")
-      : path.join(__dirname, "../renderer/branding/compact-mark.png");
+  const iconPath = isDev
+    ? path.join(__dirname, "../../public/branding/compact-mark.png")
+    : path.join(__dirname, "../renderer/branding/compact-mark.png");
 
   mainWindow = new BrowserWindow({
     width: 1200,
@@ -83,11 +81,11 @@ const createWindow = () => {
 
   mainWindow.setTitle("CellMLForge Workspace Manager");
 
-  const startUrl = isDev
-    ? "http://localhost:5173"
-    : `file://${path.join(__dirname, "../renderer/index.html")}`;
-
-  mainWindow.loadURL(startUrl);
+  if (isDev) {
+    mainWindow.loadURL("http://localhost:5173");
+  } else {
+    mainWindow.loadFile(path.join(__dirname, "../renderer/index.html"));
+  }
 
   if (isDev) {
     mainWindow.webContents.openDevTools();
