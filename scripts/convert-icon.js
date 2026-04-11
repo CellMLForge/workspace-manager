@@ -13,8 +13,12 @@ const fs = require('fs');
 const inputPath = path.join(__dirname, '../public/branding/compact-mark.png');
 const tempPath = path.join(__dirname, '../build/icon-squared.png');
 const outputPath = path.join(__dirname, '../build/icon.ico');
+const buildDir = path.dirname(outputPath);
 
 console.log(`Preparing ${inputPath} for icon conversion...`);
+
+// CI checkouts may not include the build directory; ensure it exists.
+fs.mkdirSync(buildDir, { recursive: true });
 
 // First, read the original image metadata
 sharp(inputPath)
