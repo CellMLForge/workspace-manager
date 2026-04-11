@@ -16,13 +16,14 @@
     "electron-start": "wait-on http://localhost:5173 && electron .",
     "dev": "npm run build-main && concurrently \"npm run renderer-dev\" \"wait-on http://localhost:5173 && electron .\"",
     "prepare-icons": "node scripts/convert-icon.js",
+    "prepare-icons:if-win": "node -e \"const { execSync } = require('child_process'); if (process.platform === 'win32') { execSync('npm run prepare-icons', { stdio: 'inherit' }); } else { console.log('Skipping icon preparation on non-Windows platform'); }\"",
     "dist:stop": "node -e \"const {execSync}=require('child_process'); const cmds=process.platform==='win32' ? ['taskkill /F /T /IM \\\"CellMLForge Workspace Manager*.exe\\\"'] : ['pkill -f \\\"CellMLForge Workspace Manager\\\"']; for (const cmd of cmds) { try { execSync(cmd, { stdio: 'ignore' }); } catch {} }\"",
     "dist:clean": "node -e \"const fs=require('fs'); for (const p of ['dist/win-unpacked','dist/builder-effective-config.yaml','dist/latest.yml','dist/latest-mac.yml','dist/latest-linux.yml']) { try { fs.rmSync(p,{recursive:true,force:true}); } catch {} }\"",
-    "dist": "npm run prepare-icons && npm run build-main && npm run renderer-build && electron-builder",
+    "dist": "npm run prepare-icons:if-win && npm run build-main && npm run renderer-build && electron-builder",
     "dist:fresh": "npm run dist:stop && npm run dist:clean && npm run dist",
-    "dist:dir": "npm run prepare-icons && npm run build-main && npm run renderer-build && electron-builder --dir",
+    "dist:dir": "npm run prepare-icons:if-win && npm run build-main && npm run renderer-build && electron-builder --dir",
     "dist:dir:fresh": "npm run dist:stop && npm run dist:clean && npm run dist:dir",
-    "dist:quick": "npm run prepare-icons && npm run build-main && npm run renderer-build && electron-builder --win portable --config.compression=store",
+    "dist:quick": "npm run prepare-icons:if-win && npm run build-main && npm run renderer-build && electron-builder --win portable --config.compression=store",
     "dist:quick:fresh": "npm run dist:stop && npm run dist:clean && npm run dist:quick"
   },
   "devDependencies": {
