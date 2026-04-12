@@ -1,272 +1,252 @@
 # CellMLForge Workspace Manager
 
-The CellMLForge Workspace Manager is a desktop-first application for managing OMEX/COMBINE archives with integrated git version control and GitHub push capabilities. Built as a component of the CellMLForge ecosystem, it supports drag-and-drop file import, automated manifest management, and cross-platform local execution.
+Desktop application for managing OMEX/COMBINE workspaces with local git operations and GitHub integration.
 
-## Features
+![CellMLForge logo](public/branding/cellmlforge-logo.png)
 
-- **Create and manage OMEX archives** with automatic manifest updates
-- **Drag-and-drop file import** with collision detection and path normalization
-- **Git-tracked working trees** with automatic change detection
-- **Commit message suggestion** based on file changes
-- **GitHub OAuth authentication** for secure remote push
-- **Automatic zip rebuild and base64 generation** for online service integration
-- **Cross-platform** support (Windows, macOS, Linux)
+## What it does
 
-## Getting Started
+- Create and open local OMEX workspaces
+- Import files and folders (file picker or drag and drop)
+- Auto-detect file changes and suggest commit messages
+- Edit manifest entries (format, master file, exclusion)
+- Commit changes locally via integrated git workflow
+- Build ZIP archives and generate OpenCOR launch URLs
+- Authenticate with GitHub and push to selected repositories
+- Clone and open GitHub repositories into local workspaces
+- Show diagnostics from Help -> About (including copy-to-clipboard)
+
+## Current stack
+
+- Electron main process + preload IPC bridge
+- Vue 3 renderer with TypeScript
+- PrimeVue component library
+- isomorphic-git for git operations
+- Octokit for GitHub API calls
+- xmlbuilder2 + archiver/jszip services for manifest and archive tasks
+
+## Quick start
 
 ### Prerequisites
 
-- Node.js 14+ and npm 6+
-- Git
+- Node.js 24 (recommended)
+- npm 11 (recommended)
 
-### Installation
+### Install
 
 ```bash
-npm install
+npm ci
 ```
 
-### Development
-
-Run the app in development mode with hot-reload for both Vue and Electron:
+### Run in development
 
 ```bash
 npm run dev
 ```
 
-This launches two concurrent processes:
-- React dev server on port 3000
-- Electron app pointing to the dev server
+This starts:
 
-### Building for Production
+1. Vite dev server on port 5173
+2. Electron connected to that dev server
 
-Create a packaged installer for your platform:
+### Build TypeScript only
+
+```bash
+npm run build-ts
+```
+
+## Packaging
+
+### Full package build (current platform)
 
 ```bash
 npm run dist
 ```
 
-Outputs platform-specific installers to the `dist/` directory.
-
-### Release Automation
-
-GitHub Actions can prepare a draft release and then build cross-platform distributables when that draft is published.
-
-#### Prepare a Draft Release
-
-Run the `Prepare Draft Release` workflow manually from the Actions tab and provide a plain semver value such as `0.2.0`.
-
-The workflow will:
-
-- validate the version string
-- confirm the tag does not already exist
-- bump `package.json` and `package-lock.json`
-- commit the version bump back to the selected branch
-- create and push tag `v<version>`
-- create a draft GitHub release with placeholder notes
-
-#### Build and Upload Release Assets
-
-After reviewing the draft notes, publish the draft release in GitHub. Publishing the release triggers the `Build Release Assets` workflow, which builds and uploads:
-
-- Windows installer and portable executable
-- macOS zip and dmg artifacts
-- Linux AppImage and tar.gz artifacts
-
-#### Repository Requirements
-
-- GitHub Actions must have permission to write repository contents
-- The target branch must allow the workflow to push the version bump commit
-- macOS builds are unsigned by default unless signing credentials are configured in GitHub Actions secrets
-
-### Build TypeScript Only
+### Fresh full build (stop app + clean + build)
 
 ```bash
-npm run build-ts
+npm run dist:fresh
 ```
 
-## Architecture
+### Fast local checks
 
-### Project Structure
-
+```bash
+npm run dist:dir
+npm run dist:quick
 ```
+
+Notes:
+
+- Icon preparation runs only on Windows via prepare-icons:if-win.
+- Linux and macOS builds skip Windows ICO generation.
+
+## How to use the app
+
+### 1. Create or open a workspace
+
+Use File menu:
+
+- File -> New Workspace
+- File -> Open Workspace
+- File -> New Workspace from GitHub
+- File -> Open Workspace from GitHub
+
+### 2. Sign in to GitHub (optional but recommended)
+
+- Click Sign in with GitHub in the top-right account panel.
+- Approve the device flow in browser when prompted.
+- Use the account menu to review permissions or logout.
+
+### 3. Import files
+
+- Drag files/folders into the app, or
+- Use import controls in the workspace UI.
+- If name collisions are detected, you will be prompted to overwrite or cancel.
+
+### 4. Review manifest settings
+
+For each workspace file you can:
+
+- Set manifest format/type
+- Mark a master file (commonly SED-ML)
+- Exclude files from manifest and ZIP packaging
+
+### 5. Commit changes
+
+- Refresh git insights to detect current added/modified/deleted files.
+- Accept or edit the suggested commit summary.
+- Add optional commit description.
+- Commit through the in-app workflow.
+
+### 6. Build ZIP and launch in OpenCOR
+
+- Export ZIP from the workspace view.
+- App updates manifest.xml before building archive.
+- App can generate a base64 OpenCOR launch URL.
+- You can open the URL directly or copy it to clipboard.
+
+### 7. Sync to GitHub
+
+- Use Sync to GitHub when signed in.
+- If no repository is linked, choose one from the repository browser.
+- Push to your configured branch (default main).
+
+### Help menu
+
+Use Help menu for:
+
+- About dialog with app/runtime diagnostics
+- Copy Diagnostics button for issue reports
+- View GitHub Repository
+- Submit an Issue
+
+## Screenshots
+
+UI screenshots are not yet checked into the repository. Recommended screenshots to add:
+
+1. Main workspace screen after opening a project
+2. Manifest editing table with type/master/exclude controls
+3. Git commit panel with suggestion + description fields
+4. GitHub repository browser modal
+5. About dialog showing diagnostics and Copy Diagnostics button
+
+Suggested folder structure:
+
+- docs/screenshots/main-workspace.png
+- docs/screenshots/manifest-editor.png
+- docs/screenshots/commit-panel.png
+- docs/screenshots/repo-browser.png
+- docs/screenshots/about-dialog.png
+
+After adding screenshots, embed them in this section using standard markdown image links.
+
+## Release automation
+
+Two workflows handle release prep and artifact publishing.
+
+### Prepare Draft Release workflow
+
+Workflow: .github/workflows/prepare-release.yml
+
+Trigger manually from GitHub Actions with a semver input (for example, 0.1.2 or 0.2.0-beta.1).
+
+It will:
+
+1. Validate semver format
+2. Ensure tag/release do not already exist
+3. Bump package version
+4. Verify lockfile with npm ci
+5. Commit package.json and package-lock.json
+6. Push branch commit and tag
+7. Create a draft release
+
+### Build Release Assets workflow
+
+Workflow: .github/workflows/build-release-assets.yml
+
+Triggered when a release is published.
+
+Build matrix:
+
+- Windows: NSIS installer + portable EXE
+- macOS: DMG + ZIP
+- Linux: AppImage + tar.gz
+
+Important detail:
+
+- Windows icon prep runs only on windows-latest in CI.
+
+## Project structure
+
+```text
 src/
-├── main/
-│   ├── main.ts              # Electron main process entry
-│   ├── ipc-handlers.ts      # IPC message handlers
-│   └── preload.ts           # IPC security bridge
-├── renderer/                # React UI
-│   ├── App.tsx
-│   ├── index.tsx
-│   └── components/
-├── services/                # Business logic
-│   ├── workspace.ts         # Workspace creation and import
-│   ├── manifest.ts          # OMEX manifest handling
-│   ├── git.ts               # Git operations
-│   ├── github.ts            # GitHub OAuth and push
-│   └── zip.ts               # Zip and base64 generation
-└── domain/
-    └── models.ts            # Type definitions
+  domain/
+    models.ts
+  main/
+    ipc-handlers.ts
+    main.ts
+    preload.ts
+  renderer/
+    App.vue
+    main.ts
+    index.css
+  services/
+    workspace.ts
+    manifest.ts
+    git.ts
+    github.ts
+    zip.ts
 
-dist/                        # Compiled output
-public/                      # Static assets
+scripts/
+  convert-icon.js
+
+.github/workflows/
+  prepare-release.yml
+  build-release-assets.yml
 ```
-
-### Core Workflows
-
-#### 1. Create Workspace
-
-```
-User → Create Project
-  → Initialize working directory
-  → Initialize git repository
-  → Create manifest.xml stub
-  → Ready for file import
-```
-
-#### 2. Import and Edit Files
-
-```
-User → Drag files into UI
-  → Validate and copy to working tree
-  → Calculate checksums
-  → Update manifest entries
-  → Mark git state dirty
-```
-
-#### 3. Commit and Push
-
-```
-User → Review changes
-  → Get commit suggestion (auto-generated)
-  → Edit commit message
-  → Commit to git
-  → Rebuild zip artifact
-  → Generate base64 version
-  → Push to GitHub (or just save locally)
-```
-
-### Technology Stack
-
-- **Electron** — Cross-platform desktop runtime
-- **React** — UI layer with TypeScript
-- **TypeScript** — Type-safe application code
-- **JSZip/Archiver** — Zip file handling
-- **isomorphic-git** — Git operations (server-safe)
-- **@octokit/rest** — GitHub API client
-- **xmlbuilder2** — OMEX manifest generation
-- **Electron Store** — Secure credential storage
-
-## Development Workflow
-
-### Type Checking
-
-```bash
-npm run build-ts
-```
-
-### Running Tests (future)
-
-```bash
-npm test
-```
-
-## Configuration
-
-### GitHub OAuth
-
-To enable GitHub OAuth in development:
-
-1. [Register a new GitHub OAuth App](https://github.com/settings/developers)
-2. Set Authorization callback URL to `http://localhost:3000/callback`
-3. Create a `.env.local` file:
-
-```env
-REACT_APP_GITHUB_CLIENT_ID=your_client_id_here
-REACT_APP_GITHUB_CLIENT_SECRET=your_client_secret_here
-```
-
-### Manifest Validation
-
-Manifest validation is pragmatic by default (warnings only) for quick iterations. To enable strict schema validation, set:
-
-```env
-REACT_APP_STRICT_MANIFEST_VALIDATION=true
-```
-
-## Key Design Decisions
-
-1. **Desktop-first MVP** with web companion coming in Phase 2
-2. **Full GitHub OAuth flow** in MVP for secure authentication
-3. **Pragmatic manifest validation** initially; strict schema validation planned for later phases
-4. **Generated artifacts excluded from git** (.zip, .b64 in .gitignore)
-5. **Electron framework** chosen for mature desktop integration and node ecosystem access
-
-## Next Steps
-
-### Phase 1: Complete MVP (In Progress)
-
-- [ ] Implement archive creation and opening
-- [ ] Implement manifest parser and generator
-- [ ] Implement git change detection and commit
-- [ ] Implement GitHub OAuth flow
-- [ ] Implement zip rebuild and base64 generation
-- [ ] Complete React UI with file import and commit flows
-- [ ] Test end-to-end workflow
-
-### Phase 2: Web Companion
-
-- [ ] Build Express.js backend for file staging
-- [ ] Publish to GitHub Pages
-- [ ] Implement metadata-only view mode
-- [ ] Add remote operation triggers
-
-### Phase 3: Advanced Features
-
-- [ ] Multi-file conflict resolution
-- [ ] Full COMBINE schema validation
-- [ ] Git history and blame view
-- [ ] Collaborative editing support
-
-## Testing Strategy
-
-- **Unit tests** for manifest updater, git operations, zip generation
-- **Integration tests** for end-to-end workflows (create → import → commit → push)
-- **Manual QA** for edge cases (large files, binary files, path collisions)
 
 ## Troubleshooting
 
-### "Cannot find module" errors
+### Build or packaging failures
 
-Ensure TypeScript compilation succeeded:
+- Run npm ci to ensure lockfile sync.
+- Run npm run build-ts to validate TypeScript output.
+- Use npm run dist:fresh for clean local packaging.
 
-```bash
-npm run build-ts
-```
+### GitHub authentication issues
 
-Then restart the dev server:
+- Sign out and sign back in from the account menu.
+- Use Review permissions in the account menu to validate OAuth access.
 
-```bash
-npm run dev
-```
+### Reporting issues
 
-### GitHub OAuth fails
+Use Help -> Submit an Issue in the app, or open:
 
-Check that your OAuth app credentials are set in `.env.local` and the callback URL matches your app configuration.
+- https://github.com/nickerso/cellmlforge-workspace-manager/issues/new/choose
 
-### Electron app won't start
-
-Verify that React dev server is running on port 3000:
-
-```bash
-lsof -i :3000
-```
-
-If port 3000 is in use, React will prompt for an alternative port. Update the Electron app URL if needed.
+Include diagnostics copied from Help -> About -> Copy Diagnostics.
 
 ## License
 
-Apache 2.0
-
-## Contributing
-
-Contributions are welcome! Please open an issue or pull request for features or bug fixes.
+Apache-2.0
