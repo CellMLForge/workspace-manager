@@ -58,6 +58,14 @@ const buildApplicationMenu = () => {
           },
         },
         { type: "separator" },
+        {
+          label: "Set Workspace Library...",
+          accelerator: "CmdOrCtrl+Shift+L",
+          click: () => {
+            mainWindow?.webContents.send("menu:set-workspace-library");
+          },
+        },
+        { type: "separator" },
         isMac ? { role: "close" as const } : { role: "quit" as const },
       ],
     },

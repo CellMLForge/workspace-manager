@@ -27,9 +27,43 @@ ipcMain.handle(
   }
 );
 
+ipcMain.handle(
+  "workspace:createInLibrary",
+  async (event, name: string, description?: string) => {
+    return workspaceService.createWorkspaceInLibrary(name, description);
+  }
+);
+
 ipcMain.handle("workspace:open", async (event, workingDir: string) => {
   return workspaceService.openWorkspace(workingDir);
 });
+
+ipcMain.handle("workspace:getLibrarySettings", async () => {
+  return workspaceService.getWorkspaceLibrarySettings();
+});
+
+ipcMain.handle("workspace:setLibraryPath", async (event, libraryPath: string) => {
+  return workspaceService.setWorkspaceLibraryPath(libraryPath);
+});
+
+ipcMain.handle("workspace:listLibraryWorkspaces", async () => {
+  return workspaceService.listLibraryWorkspaces();
+});
+
+ipcMain.handle("workspace:importToLibrary", async (event, sourceWorkspaceDir: string) => {
+  return workspaceService.importWorkspaceToLibrary(sourceWorkspaceDir);
+});
+
+ipcMain.handle("workspace:rememberLastOpened", async (event, workingDir: string | null) => {
+  return workspaceService.rememberLastOpenedWorkspace(workingDir);
+});
+
+ipcMain.handle(
+  "workspace:updateMetadata",
+  async (event, workingDir: string, updates: { name?: string; description?: string }) => {
+    return workspaceService.updateWorkspaceMetadata(workingDir, updates);
+  }
+);
 
 ipcMain.handle(
   "workspace:importFiles",
@@ -366,6 +400,39 @@ ipcMain.handle("ui:selectGitHubRepository", async (event, repositoryNames: strin
     message: "Choose a repository to link or clone.",
     detail: overflowCount > 0
       ? `Showing first ${cappedNames.length} repositories. ${overflowCount} more are not shown.`
+      : "",
+  };
+
+  const result = parentWindow
+    ? await dialog.showMessageBox(parentWindow, options)
+    : await dialog.showMessageBox(options);
+
+  if (result.response < 0 || result.response >= cappedNames.length) {
+    return null;
+  }
+
+  return result.response;
+});
+
+ipcMain.handle("ui:selectWorkspace", async (event, workspaceNames: string[]) => {
+  if (!workspaceNames.length) {
+    return null;
+  }
+
+  const parentWindow = BrowserWindow.fromWebContents(event.sender) ?? undefined;
+  const cappedNames = workspaceNames.slice(0, 12);
+  const overflowCount = workspaceNames.length - cappedNames.length;
+
+  const options = {
+    type: "question" as const,
+    buttons: [...cappedNames, "Cancel"],
+    defaultId: 0,
+    cancelId: cappedNames.length,
+    noLink: true,
+    title: "Open workspace",
+    message: "Choose a workspace from your library.",
+    detail: overflowCount > 0
+      ? `Showing first ${cappedNames.length} workspaces. ${overflowCount} more are not shown.`
       : "",
   };
 

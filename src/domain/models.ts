@@ -51,6 +51,11 @@ export interface WorkspaceProject {
   lastModifiedAt: string; // ISO 8601
 }
 
+export interface WorkspaceLibrarySettings {
+  libraryPath: string | null;
+  lastOpenedWorkspacePath: string | null;
+}
+
 // Represents a file or folder in the working tree
 export interface WorkingTreeFile {
   path: string; // relative within workspace

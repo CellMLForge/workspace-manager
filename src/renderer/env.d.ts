@@ -11,7 +11,14 @@ interface IpcResult<T> {
 interface RendererApi {
   workspace: {
     create: (name: string, workingDir: string, description?: string) => Promise<IpcResult<import("@domain/models").WorkspaceProject>>;
+    createInLibrary: (name: string, description?: string) => Promise<IpcResult<import("@domain/models").WorkspaceProject>>;
     open: (workingDir: string) => Promise<IpcResult<import("@domain/models").WorkspaceProject>>;
+    getLibrarySettings: () => Promise<IpcResult<import("@domain/models").WorkspaceLibrarySettings>>;
+    setLibraryPath: (libraryPath: string) => Promise<IpcResult<import("@domain/models").WorkspaceLibrarySettings>>;
+    listLibraryWorkspaces: () => Promise<IpcResult<import("@domain/models").WorkspaceProject[]>>;
+    importToLibrary: (sourceWorkspaceDir: string) => Promise<IpcResult<import("@domain/models").WorkspaceProject>>;
+    rememberLastOpened: (workingDir: string | null) => Promise<IpcResult<void>>;
+    updateMetadata: (workingDir: string, updates: { name?: string; description?: string }) => Promise<IpcResult<{ name: string; description?: string; createdAt: string }>>;
     importFiles: (
       workspace: import("@domain/models").WorkspaceProject,
       sourceFiles: string[],
@@ -78,6 +85,7 @@ interface RendererApi {
     openExternal: (url: string) => Promise<void>;
     confirmImportOverwrite: (collisionNames: string[]) => Promise<boolean>;
     selectGitHubRepository: (repositoryNames: string[]) => Promise<number | null>;
+    selectWorkspace: (workspaceNames: string[]) => Promise<number | null>;
     confirmPrivateRepository: () => Promise<boolean | null>;
     confirmBuildWithUncommittedChanges: (pendingSummary: string) => Promise<boolean>;
     getPathForFile: (file: File) => string;
@@ -85,6 +93,7 @@ interface RendererApi {
   events: {
     onMenuNewWorkspace: (callback: () => void) => () => void;
     onMenuOpenWorkspace: (callback: () => void) => () => void;
+    onMenuSetWorkspaceLibrary: (callback: () => void) => () => void;
     onMenuNewWorkspaceGitHub: (callback: () => void) => () => void;
     onMenuOpenWorkspaceGitHub: (callback: () => void) => () => void;
     onGitHubAuthProgress: (

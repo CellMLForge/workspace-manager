@@ -6,12 +6,35 @@ import { constants as fsConstants, promises as fs } from "fs";
 import * as path from "path";
 import { randomUUID } from "crypto";
 import * as git from "isomorphic-git";
-import { WorkspaceProject, OperationResult, WorkingTreeFile } from "../domain/models";
+import Store from "electron-store";
+import {
+  WorkspaceLibrarySettings,
+  WorkspaceProject,
+  OperationResult,
+  WorkingTreeFile,
+} from "../domain/models";
 import { WorkspaceState } from "../domain/models";
 import { gitService } from "./git";
 
+// Read app version from package.json for versioning config files
+const packageJson = require("../../package.json") as { version: string };
+const APP_VERSION = packageJson.version;
+
 const MANIFEST_FILE_NAME = "manifest.xml";
 const ARTIFACTS_DIRECTORY_NAME = ".omex-artifacts";
+const WORKSPACE_CONFIG_FILE_NAME = "cellmlforge-workspace-manager.json";
+const WORKSPACE_CONFIG_SCHEMA_VERSION = "1.0";
+
+type WorkspaceStoreShape = WorkspaceLibrarySettings;
+
+type StoredWorkspaceMetadata = {
+  schemaVersion: string;
+  appVersion: string;
+  name: string;
+  description?: string;
+  createdAt: string;
+  lastModifiedBy?: string;
+};
 
 const normalizeSlashes = (value: string) => value.split(path.sep).join("/");
 
@@ -109,7 +132,306 @@ const normalizeGitHubRemoteUrl = (remoteUrl: string): string => {
   return trimmed;
 };
 
+const detectHasUncommittedChanges = async (workingDir: string) => {
+  try {
+    const matrix = await git.statusMatrix({ fs: fsDefault, dir: workingDir });
+    return matrix.some(([, head, workdir, stage]) => head !== workdir || workdir !== stage);
+  } catch {
+    return true;
+  }
+};
+
 export class WorkspaceService {
+  private store = new Store<WorkspaceStoreShape>({
+    name: "cellmlforge-workspace-manager-workspaces",
+    defaults: {
+      libraryPath: null,
+      lastOpenedWorkspacePath: null,
+    },
+  });
+
+  private getWorkspaceMetadataPath(workingDir: string) {
+    return path.join(workingDir, WORKSPACE_CONFIG_FILE_NAME);
+  }
+
+  private readWorkspaceLibrarySettings(): WorkspaceLibrarySettings {
+    return {
+      libraryPath: this.store.get("libraryPath", null),
+      lastOpenedWorkspacePath: this.store.get("lastOpenedWorkspacePath", null),
+    };
+  }
+
+  private async writeWorkspaceMetadata(
+    workingDir: string,
+    metadata: Partial<StoredWorkspaceMetadata>
+  ) {
+    const metadataPath = this.getWorkspaceMetadataPath(workingDir);
+    // Ensure the metadata includes version info
+    const versionedMetadata = {
+      ...metadata,
+      schemaVersion: WORKSPACE_CONFIG_SCHEMA_VERSION,
+      appVersion: APP_VERSION,
+    } as StoredWorkspaceMetadata;
+    await fs.mkdir(path.dirname(metadataPath), { recursive: true });
+    await fs.writeFile(metadataPath, JSON.stringify(versionedMetadata, null, 2), "utf8");
+  }
+
+  private async readWorkspaceMetadata(
+    workingDir: string
+  ): Promise<StoredWorkspaceMetadata | null> {
+    try {
+      const content = await fs.readFile(this.getWorkspaceMetadataPath(workingDir), "utf8");
+      const parsed = JSON.parse(content) as Partial<StoredWorkspaceMetadata>;
+      if (!parsed.name || !parsed.createdAt) {
+        return null;
+      }
+
+      return {
+        schemaVersion: parsed.schemaVersion || WORKSPACE_CONFIG_SCHEMA_VERSION,
+        appVersion: parsed.appVersion || APP_VERSION,
+        name: parsed.name,
+        description: parsed.description?.trim() || undefined,
+        createdAt: parsed.createdAt,
+        lastModifiedBy: parsed.lastModifiedBy,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  private async ensureWorkspaceMetadata(
+    workingDir: string,
+    fallbackName?: string
+  ): Promise<StoredWorkspaceMetadata> {
+    const existingMetadata = await this.readWorkspaceMetadata(workingDir);
+    if (existingMetadata) {
+      return existingMetadata;
+    }
+
+    const dirStats = await fs.stat(workingDir);
+    const defaultMetadata: StoredWorkspaceMetadata = {
+      schemaVersion: WORKSPACE_CONFIG_SCHEMA_VERSION,
+      appVersion: APP_VERSION,
+      name: (fallbackName || path.basename(workingDir)).trim() || "workspace",
+      createdAt: dirStats.birthtime.toISOString(),
+      lastModifiedBy: APP_VERSION,
+    };
+
+    await this.writeWorkspaceMetadata(workingDir, defaultMetadata);
+    return defaultMetadata;
+  }
+
+  private async buildWorkspaceProject(
+    resolvedWorkingDir: string
+  ): Promise<WorkspaceProject> {
+    const manifestPath = path.join(resolvedWorkingDir, MANIFEST_FILE_NAME);
+    await fs.access(manifestPath);
+
+    const gitDir = path.join(resolvedWorkingDir, ".git");
+    await fs.access(gitDir);
+
+    const artifactsDir = path.join(resolvedWorkingDir, ARTIFACTS_DIRECTORY_NAME);
+    const fallbackName = path.basename(resolvedWorkingDir);
+    const metadata = await this.ensureWorkspaceMetadata(resolvedWorkingDir, fallbackName);
+    const workspaceName = metadata?.name?.trim() || fallbackName;
+    const zipPath = path.join(artifactsDir, `${buildWorkspaceSlug(workspaceName)}.zip`);
+
+    let gitBranch = "main";
+    let gitRepoUrl: string | undefined;
+    try {
+      const branch = await git.currentBranch({ fs: fsDefault, dir: resolvedWorkingDir });
+      if (branch) {
+        gitBranch = branch;
+      }
+
+      const remotes = await git.listRemotes({ fs: fsDefault, dir: resolvedWorkingDir });
+      const githubRemotes = remotes.filter((remote) => /github\.com/i.test(remote.url));
+      const preferredRemote =
+        githubRemotes.find((remote) => remote.remote === "origin") ??
+        githubRemotes[0];
+
+      if (preferredRemote?.url) {
+        gitRepoUrl = normalizeGitHubRemoteUrl(preferredRemote.url);
+      }
+    } catch {
+      // Non-fatal — fall back to defaults
+    }
+
+    const manifestStats = await fs.stat(manifestPath);
+
+    const hasUncommittedChanges = await detectHasUncommittedChanges(resolvedWorkingDir);
+
+    return {
+      id: randomUUID(),
+      name: workspaceName,
+      description: metadata?.description,
+      workingDir: resolvedWorkingDir,
+      zipPath,
+      artifactsDir,
+      gitRepoUrl,
+      gitBranch,
+      manifestPath,
+      state: hasUncommittedChanges ? WorkspaceState.WorkingTreeDirty : WorkspaceState.CommitReady,
+      createdAt: metadata.createdAt,
+      lastModifiedAt: manifestStats.mtime.toISOString(),
+    };
+  }
+
+  async getWorkspaceLibrarySettings(): Promise<OperationResult<WorkspaceLibrarySettings>> {
+    try {
+      return { ok: true, data: this.readWorkspaceLibrarySettings() };
+    } catch (error) {
+      return { ok: false, error };
+    }
+  }
+
+  async setWorkspaceLibraryPath(
+    libraryPath: string
+  ): Promise<OperationResult<WorkspaceLibrarySettings>> {
+    try {
+      const trimmedPath = libraryPath.trim();
+      if (!trimmedPath) {
+        throw new Error("A workspace library directory is required.");
+      }
+
+      const resolvedLibraryPath = path.resolve(trimmedPath);
+      await fs.mkdir(resolvedLibraryPath, { recursive: true });
+
+      this.store.set("libraryPath", resolvedLibraryPath);
+
+      const lastOpenedWorkspacePath = this.store.get("lastOpenedWorkspacePath", null);
+      if (lastOpenedWorkspacePath && !isPathInside(lastOpenedWorkspacePath, resolvedLibraryPath)) {
+        this.store.set("lastOpenedWorkspacePath", null);
+      }
+
+      return { ok: true, data: this.readWorkspaceLibrarySettings() };
+    } catch (error) {
+      return { ok: false, error };
+    }
+  }
+
+  async rememberLastOpenedWorkspace(
+    workingDir: string | null
+  ): Promise<OperationResult<void>> {
+    try {
+      const trimmedPath = workingDir?.trim() ?? "";
+      if (!trimmedPath) {
+        this.store.set("lastOpenedWorkspacePath", null);
+        return { ok: true };
+      }
+
+      this.store.set("lastOpenedWorkspacePath", path.resolve(trimmedPath));
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error };
+    }
+  }
+
+  async listLibraryWorkspaces(): Promise<OperationResult<WorkspaceProject[]>> {
+    try {
+      const { libraryPath } = this.readWorkspaceLibrarySettings();
+      if (!libraryPath) {
+        return { ok: true, data: [] };
+      }
+
+      await fs.mkdir(libraryPath, { recursive: true });
+      const entries = await fs.readdir(libraryPath, { withFileTypes: true });
+      const workspaces: WorkspaceProject[] = [];
+
+      for (const entry of entries) {
+        if (!entry.isDirectory()) {
+          continue;
+        }
+
+        const candidatePath = path.join(libraryPath, entry.name);
+        try {
+          workspaces.push(await this.buildWorkspaceProject(candidatePath));
+        } catch {
+          // Ignore folders that are not valid workspaces.
+        }
+      }
+
+      workspaces.sort((left, right) => left.name.localeCompare(right.name));
+      return { ok: true, data: workspaces };
+    } catch (error) {
+      return { ok: false, error };
+    }
+  }
+
+  async createWorkspaceInLibrary(
+    name: string,
+    description?: string
+  ): Promise<OperationResult<WorkspaceProject>> {
+    try {
+      const { libraryPath } = this.readWorkspaceLibrarySettings();
+      if (!libraryPath) {
+        throw new Error("Set a workspace library location before creating a workspace.");
+      }
+
+      const workspaceSlug = buildWorkspaceSlug(name);
+      const targetDir = path.join(libraryPath, workspaceSlug);
+
+      try {
+        await fs.access(targetDir);
+        throw new Error(
+          `A workspace named '${workspaceSlug}' already exists in the current workspace library.`
+        );
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+          throw error;
+        }
+      }
+
+      return this.createWorkspace(name, targetDir, description);
+    } catch (error) {
+      return { ok: false, error };
+    }
+  }
+
+  async importWorkspaceToLibrary(
+    sourceWorkspaceDir: string
+  ): Promise<OperationResult<WorkspaceProject>> {
+    try {
+      const { libraryPath } = this.readWorkspaceLibrarySettings();
+      if (!libraryPath) {
+        throw new Error("Set a workspace library location before importing a workspace.");
+      }
+
+      const sourcePath = path.resolve(sourceWorkspaceDir.trim());
+      if (!sourceWorkspaceDir.trim()) {
+        throw new Error("Select a workspace directory to import.");
+      }
+
+      const sourceWorkspace = await this.buildWorkspaceProject(sourcePath);
+      const targetDir = path.join(libraryPath, buildWorkspaceSlug(sourceWorkspace.name));
+
+      if (normalizeSlashes(sourcePath) === normalizeSlashes(targetDir)) {
+        throw new Error("The selected workspace is already inside the current workspace library.");
+      }
+
+      try {
+        await fs.access(targetDir);
+        throw new Error(
+          `A workspace named '${path.basename(targetDir)}' already exists in the current workspace library.`
+        );
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+          throw error;
+        }
+      }
+
+      await fs.cp(sourcePath, targetDir, {
+        recursive: true,
+        force: false,
+        errorOnExist: true,
+      });
+
+      return this.openWorkspace(targetDir);
+    } catch (error) {
+      return { ok: false, error };
+    }
+  }
+
   /**
   * Create a new empty workspace project
    */
@@ -144,6 +466,11 @@ export class WorkspaceService {
 
       await fs.mkdir(artifactsDir, { recursive: true });
       await fs.writeFile(manifestPath, createManifestStub(trimmedName), "utf8");
+      await this.writeWorkspaceMetadata(resolvedWorkingDir, {
+        name: trimmedName,
+        description: description?.trim() || undefined,
+        createdAt: now,
+      });
 
       const gitResult = await gitService.initRepository(resolvedWorkingDir, [
         `${ARTIFACTS_DIRECTORY_NAME}/`,
@@ -190,61 +517,28 @@ export class WorkspaceService {
 
       await fs.access(resolvedWorkingDir);
 
-      const manifestPath = path.join(resolvedWorkingDir, MANIFEST_FILE_NAME);
+      let workspace: WorkspaceProject;
       try {
-        await fs.access(manifestPath);
+        workspace = await this.buildWorkspaceProject(resolvedWorkingDir);
       } catch {
-        throw new Error("No manifest.xml found — this directory is not an OMEX workspace.");
-      }
-
-      const gitDir = path.join(resolvedWorkingDir, ".git");
-      try {
-        await fs.access(gitDir);
-      } catch {
-        throw new Error("No .git directory found — the workspace has not been initialised as a git repository.");
-      }
-
-      const artifactsDir = path.join(resolvedWorkingDir, ARTIFACTS_DIRECTORY_NAME);
-      const name = path.basename(resolvedWorkingDir);
-      const zipPath = path.join(artifactsDir, `${buildWorkspaceSlug(name)}.zip`);
-
-      let gitBranch = "main";
-      let gitRepoUrl: string | undefined;
-      try {
-        const branch = await git.currentBranch({ fs: fsDefault, dir: resolvedWorkingDir });
-        if (branch) {
-          gitBranch = branch;
+        const manifestPath = path.join(resolvedWorkingDir, MANIFEST_FILE_NAME);
+        try {
+          await fs.access(manifestPath);
+        } catch {
+          throw new Error("No manifest.xml found — this directory is not an OMEX workspace.");
         }
 
-        const remotes = await git.listRemotes({ fs: fsDefault, dir: resolvedWorkingDir });
-        const githubRemotes = remotes.filter((remote) => /github\.com/i.test(remote.url));
-        const preferredRemote =
-          githubRemotes.find((remote) => remote.remote === "origin") ??
-          githubRemotes[0];
-
-        if (preferredRemote?.url) {
-          gitRepoUrl = normalizeGitHubRemoteUrl(preferredRemote.url);
+        const gitDir = path.join(resolvedWorkingDir, ".git");
+        try {
+          await fs.access(gitDir);
+        } catch {
+          throw new Error(
+            "No .git directory found — the workspace has not been initialised as a git repository."
+          );
         }
-      } catch {
-        // Non-fatal — fall back to defaults
+
+        throw new Error("Unable to open the selected workspace.");
       }
-
-      const manifestStats = await fs.stat(manifestPath);
-      const dirStats = await fs.stat(resolvedWorkingDir);
-
-      const workspace: WorkspaceProject = {
-        id: randomUUID(),
-        name,
-        workingDir: resolvedWorkingDir,
-        zipPath,
-        artifactsDir,
-        gitRepoUrl,
-        gitBranch,
-        manifestPath,
-        state: WorkspaceState.WorkingTreeDirty,
-        createdAt: dirStats.birthtime.toISOString(),
-        lastModifiedAt: manifestStats.mtime.toISOString(),
-      };
 
       return { ok: true, data: workspace };
     } catch (error) {
@@ -428,6 +722,33 @@ export class WorkspaceService {
       // TODO: Implementation
       // Returns path to .zip file
       throw new Error("Not implemented");
+    } catch (error) {
+      return { ok: false, error };
+    }
+  }
+
+  /**
+   * Update workspace metadata (name, description)
+   */
+  async updateWorkspaceMetadata(
+    workingDir: string,
+    updates: Partial<StoredWorkspaceMetadata>
+  ): Promise<OperationResult<StoredWorkspaceMetadata>> {
+    try {
+      const resolvedWorkingDir = path.resolve(workingDir.trim());
+      const existingMetadata = await this.ensureWorkspaceMetadata(resolvedWorkingDir);
+
+      const updatedMetadata: StoredWorkspaceMetadata = {
+        schemaVersion: existingMetadata.schemaVersion,
+        appVersion: APP_VERSION,
+        name: updates.name?.trim() || existingMetadata.name,
+        description: updates.description !== undefined ? updates.description?.trim() || undefined : existingMetadata.description,
+        createdAt: existingMetadata.createdAt,
+        lastModifiedBy: APP_VERSION,
+      };
+
+      await this.writeWorkspaceMetadata(resolvedWorkingDir, updatedMetadata);
+      return { ok: true, data: updatedMetadata };
     } catch (error) {
       return { ok: false, error };
     }

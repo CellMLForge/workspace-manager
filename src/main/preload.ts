@@ -9,8 +9,22 @@ contextBridge.exposeInMainWorld("api", {
   workspace: {
     create: (name: string, workingDir: string, description?: string) =>
       ipcRenderer.invoke("workspace:create", name, workingDir, description),
+    createInLibrary: (name: string, description?: string) =>
+      ipcRenderer.invoke("workspace:createInLibrary", name, description),
     open: (workingDir: string) =>
       ipcRenderer.invoke("workspace:open", workingDir),
+    getLibrarySettings: () =>
+      ipcRenderer.invoke("workspace:getLibrarySettings"),
+    setLibraryPath: (libraryPath: string) =>
+      ipcRenderer.invoke("workspace:setLibraryPath", libraryPath),
+    listLibraryWorkspaces: () =>
+      ipcRenderer.invoke("workspace:listLibraryWorkspaces"),
+    importToLibrary: (sourceWorkspaceDir: string) =>
+      ipcRenderer.invoke("workspace:importToLibrary", sourceWorkspaceDir),
+    rememberLastOpened: (workingDir: string | null) =>
+      ipcRenderer.invoke("workspace:rememberLastOpened", workingDir),
+    updateMetadata: (workingDir: string, updates: { name?: string; description?: string }) =>
+      ipcRenderer.invoke("workspace:updateMetadata", workingDir, updates),
     importFiles: (workspace: any, sourceFiles: string[], overwriteExisting?: boolean) =>
       ipcRenderer.invoke("workspace:importFiles", workspace, sourceFiles, overwriteExisting),
     listFiles: (workspace: any) =>
@@ -110,6 +124,8 @@ contextBridge.exposeInMainWorld("api", {
       ipcRenderer.invoke("ui:confirmImportOverwrite", collisionNames),
     selectGitHubRepository: (repositoryNames: string[]) =>
       ipcRenderer.invoke("ui:selectGitHubRepository", repositoryNames),
+    selectWorkspace: (workspaceNames: string[]) =>
+      ipcRenderer.invoke("ui:selectWorkspace", workspaceNames),
     confirmPrivateRepository: () =>
       ipcRenderer.invoke("ui:confirmPrivateRepository"),
     confirmBuildWithUncommittedChanges: (pendingSummary: string) =>
@@ -130,6 +146,13 @@ contextBridge.exposeInMainWorld("api", {
       ipcRenderer.on("menu:open-workspace", listener);
       return () => {
         ipcRenderer.removeListener("menu:open-workspace", listener);
+      };
+    },
+    onMenuSetWorkspaceLibrary: (callback: () => void) => {
+      const listener = () => callback();
+      ipcRenderer.on("menu:set-workspace-library", listener);
+      return () => {
+        ipcRenderer.removeListener("menu:set-workspace-library", listener);
       };
     },
     onMenuNewWorkspaceGitHub: (callback: () => void) => {

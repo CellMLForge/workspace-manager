@@ -11,6 +11,7 @@
     "renderer-build": "vite build",
     "renderer-preview": "vite preview",
     "build-main": "tsc -p tsconfig.main.json",
+    "test:workspace-service": "npm run build-main && node --test tests/workspace-service.test.js",
     "typecheck-renderer": "vue-tsc --noEmit -p tsconfig.renderer.json",
     "build-ts": "npm run build-main && npm run typecheck-renderer",
     "electron-start": "wait-on http://localhost:5173 && electron .",

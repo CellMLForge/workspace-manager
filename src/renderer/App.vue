@@ -9,8 +9,13 @@ import type {
   PushContext,
   WorkingTreeFile,
 } from "@domain/models";
+import { WorkspaceState } from "@domain/models";
 
 const currentWorkspace = ref<WorkspaceProject | null>(null);
+const workspaceLibraryPath = ref("");
+const workspaceLibraryLastOpenedPath = ref<string | null>(null);
+const workspaceLibraryWorkspaces = ref<WorkspaceProject[]>([]);
+const workspaceLibraryInitialized = ref(false);
 const githubSession = ref<GitHubSession | null>(null);
 const loading = ref(false);
 const isAuthenticating = ref(false);
@@ -21,7 +26,8 @@ const dragActive = ref(false);
 const error = ref<string | null>(null);
 const info = ref<string | null>(null);
 const workspaceName = ref("My Workspace");
-const workingPath = ref("C:/tmp/omex-workspace");
+const workspaceDescription = ref("");
+const workingPath = ref("");
 const zipArchiveName = ref("omex-workspace.zip");
 const openCorLaunchUrl = ref<string | null>(null);
 const files = ref<WorkingTreeFile[]>([]);
@@ -104,6 +110,43 @@ const trimDisplayUrl = (url: string | null, maxLength = 128) => {
   }
 
   return `${url.slice(0, maxLength - 3)}...`;
+};
+
+const normalizeComparablePath = (value: string | null) => {
+  if (!value) {
+    return "";
+  }
+
+  return value.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+};
+
+const isPathInsideDirectory = (candidatePath: string | null, parentPath: string | null) => {
+  const normalizedCandidate = normalizeComparablePath(candidatePath);
+  const normalizedParent = normalizeComparablePath(parentPath);
+
+  if (!normalizedCandidate || !normalizedParent) {
+    return false;
+  }
+
+  return (
+    normalizedCandidate === normalizedParent ||
+    normalizedCandidate.startsWith(`${normalizedParent}/`)
+  );
+};
+
+const joinFileSystemPath = (basePath: string, childName: string) => {
+  const separator = basePath.includes("\\") ? "\\" : "/";
+  const normalizedBase = basePath.replace(/[\\/]+$/, "");
+  return `${normalizedBase}${separator}${childName}`;
+};
+
+const slugFromRepositoryUrl = (repoUrl: string) => {
+  const withoutGitSuffix = repoUrl.trim().replace(/\.git$/i, "");
+  const candidate = withoutGitSuffix.split("/").pop() ?? "workspace";
+  return candidate
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "") || "workspace";
 };
 
 const appendActivityLog = (kind: "info" | "error", message: string) => {
@@ -279,6 +322,267 @@ const cancelRepoBrowser = () => {
   const resolver = resolveRepoBrowser;
   resolveRepoBrowser = null;
   resolver?.(null);
+};
+
+const syncWorkspaceLibrarySettings = (libraryPath: string | null, lastOpenedWorkspacePath: string | null) => {
+  workspaceLibraryPath.value = libraryPath ?? "";
+  workspaceLibraryLastOpenedPath.value = lastOpenedWorkspacePath;
+};
+
+const rememberLastOpenedWorkspace = async (workingDir: string | null) => {
+  workspaceLibraryLastOpenedPath.value = workingDir;
+  await window.api?.workspace?.rememberLastOpened?.(workingDir);
+};
+
+const mergeWorkspaceLibraryWorkspaces = (nextWorkspaces: WorkspaceProject[]) => {
+  const current = workspaceLibraryWorkspaces.value;
+  const pathKeyFor = (workspace: WorkspaceProject) => normalizeComparablePath(workspace.workingDir);
+  const nextKeys = new Set(nextWorkspaces.map(pathKeyFor));
+
+  for (let index = current.length - 1; index >= 0; index -= 1) {
+    if (!nextKeys.has(pathKeyFor(current[index]))) {
+      current.splice(index, 1);
+    }
+  }
+
+  for (let nextIndex = 0; nextIndex < nextWorkspaces.length; nextIndex += 1) {
+    const nextWorkspace = nextWorkspaces[nextIndex];
+    const nextKey = pathKeyFor(nextWorkspace);
+    const existingIndex = current.findIndex((workspace) => pathKeyFor(workspace) === nextKey);
+
+    if (existingIndex === -1) {
+      current.splice(nextIndex, 0, nextWorkspace);
+      continue;
+    }
+
+    if (existingIndex !== nextIndex) {
+      const [movedWorkspace] = current.splice(existingIndex, 1);
+      current.splice(nextIndex, 0, movedWorkspace);
+    }
+
+    Object.assign(current[nextIndex], nextWorkspace);
+  }
+};
+
+const workspaceStatusBadgesFor = (workspace: WorkspaceProject) => {
+  const badges: Array<{ label: string; kind: "current" | "dirty" | "clean" | "github" }> = [];
+  const isCurrent =
+    normalizeComparablePath(currentWorkspace.value?.workingDir ?? null) ===
+    normalizeComparablePath(workspace.workingDir);
+
+  if (isCurrent) {
+    badges.push({ label: "Current", kind: "current" });
+  }
+
+  if (workspace.state === WorkspaceState.WorkingTreeDirty) {
+    badges.push({ label: "Dirty", kind: "dirty" });
+  } else {
+    badges.push({ label: "Clean", kind: "clean" });
+  }
+
+  if (workspace.gitRepoUrl) {
+    badges.push({ label: "GitHub", kind: "github" });
+  }
+
+  return badges;
+};
+
+const openWorkspaceByPath = async (
+  workingDir: string,
+  options?: { rememberSelection?: boolean; silent?: boolean }
+) => {
+  if (!window.api?.workspace?.open) {
+    error.value = "Workspace open API not available";
+    return false;
+  }
+
+  loading.value = true;
+  error.value = null;
+  if (!options?.silent) {
+    info.value = null;
+  }
+
+  try {
+    const result = await window.api.workspace.open(workingDir);
+    if (!result.ok || !result.data) {
+      error.value = String(result.error ?? "Failed to open workspace");
+      return false;
+    }
+
+    await bootstrapWorkspaceContext(result.data);
+
+    if (options?.rememberSelection !== false && isPathInsideDirectory(workingDir, workspaceLibraryPath.value)) {
+      await rememberLastOpenedWorkspace(workingDir);
+    }
+
+    return true;
+  } catch (caughtError) {
+    error.value = caughtError instanceof Error ? caughtError.message : "Unknown error";
+    return false;
+  } finally {
+    loading.value = false;
+  }
+};
+
+let initialLibrarySelectionResolved = false;
+let workspaceLibraryRefreshTimer: number | undefined;
+let removeWorkspaceLibraryFocusListener: (() => void) | null = null;
+let removeWorkspaceLibraryVisibilityListener: (() => void) | null = null;
+
+const LIBRARY_SCAN_MS_FOCUSED = 5000;
+const LIBRARY_SCAN_MS_UNFOCUSED = 30000;
+
+const currentLibraryScanInterval = () =>
+  document.hasFocus() && document.visibilityState === "visible"
+    ? LIBRARY_SCAN_MS_FOCUSED
+    : LIBRARY_SCAN_MS_UNFOCUSED;
+
+const restartWorkspaceLibraryRefreshTimer = () => {
+  if (workspaceLibraryRefreshTimer !== undefined) {
+    window.clearInterval(workspaceLibraryRefreshTimer);
+  }
+
+  workspaceLibraryRefreshTimer = window.setInterval(() => {
+    void refreshWorkspaceLibrary({ restoreLastSelection: false, silent: true });
+  }, currentLibraryScanInterval());
+};
+
+const refreshWorkspaceLibrary = async (options?: { restoreLastSelection?: boolean; silent?: boolean }) => {
+  if (!window.api?.workspace?.getLibrarySettings || !window.api?.workspace?.listLibraryWorkspaces) {
+    return;
+  }
+
+  const restoreLastSelection = options?.restoreLastSelection ?? false;
+  const silent = options?.silent ?? true;
+
+  try {
+    const settingsResult = await window.api.workspace.getLibrarySettings();
+    if (!settingsResult.ok || !settingsResult.data) {
+      if (!silent) {
+        error.value = String(settingsResult.error ?? "Unable to load workspace library settings");
+      }
+      return;
+    }
+
+    syncWorkspaceLibrarySettings(
+      settingsResult.data.libraryPath,
+      settingsResult.data.lastOpenedWorkspacePath
+    );
+
+    if (!settingsResult.data.libraryPath) {
+      workspaceLibraryWorkspaces.value.splice(0, workspaceLibraryWorkspaces.value.length);
+      workspaceLibraryInitialized.value = true;
+      initialLibrarySelectionResolved = restoreLastSelection || initialLibrarySelectionResolved;
+      return;
+    }
+
+    const result = await window.api.workspace.listLibraryWorkspaces();
+    if (!result.ok) {
+      if (!silent) {
+        error.value = String(result.error ?? "Unable to scan workspace library");
+      }
+      return;
+    }
+
+    mergeWorkspaceLibraryWorkspaces(result.data ?? []);
+    workspaceLibraryInitialized.value = true;
+
+    if (restoreLastSelection && !initialLibrarySelectionResolved) {
+      initialLibrarySelectionResolved = true;
+
+      const lastOpenedPath = settingsResult.data.lastOpenedWorkspacePath;
+      if (!currentWorkspace.value && lastOpenedPath) {
+        const match = workspaceLibraryWorkspaces.value.find(
+          (workspace) => normalizeComparablePath(workspace.workingDir) === normalizeComparablePath(lastOpenedPath)
+        );
+
+        if (match) {
+          await openWorkspaceByPath(match.workingDir, { rememberSelection: false, silent: true });
+        }
+      }
+    }
+  } finally {
+    // No-op
+  }
+};
+
+const chooseWorkspaceLibrary = async () => {
+  if (!window.api?.ui?.pickDirectory || !window.api?.workspace?.setLibraryPath) {
+    error.value = "Workspace library APIs are not available";
+    return false;
+  }
+
+  const selectedPath = await window.api.ui.pickDirectory(workspaceLibraryPath.value || workingPath.value || undefined);
+  if (!selectedPath) {
+    return false;
+  }
+
+  const result = await window.api.workspace.setLibraryPath(selectedPath);
+  if (!result.ok || !result.data) {
+    error.value = String(result.error ?? "Unable to save workspace library location");
+    return false;
+  }
+
+  syncWorkspaceLibrarySettings(result.data.libraryPath, result.data.lastOpenedWorkspacePath);
+  await refreshWorkspaceLibrary({
+    restoreLastSelection: !initialLibrarySelectionResolved,
+    silent: false,
+  });
+  info.value = `Workspace library set to ${result.data.libraryPath}`;
+  return true;
+};
+
+const ensureWorkspaceLibraryConfigured = async (promptIfMissing = true) => {
+  if (workspaceLibraryPath.value.trim()) {
+    return true;
+  }
+
+  await refreshWorkspaceLibrary({ restoreLastSelection: false, silent: true });
+  if (workspaceLibraryPath.value.trim()) {
+    return true;
+  }
+
+  if (!promptIfMissing) {
+    return false;
+  }
+
+  return chooseWorkspaceLibrary();
+};
+
+const handleImportWorkspaceToLibrary = async () => {
+  const libraryReady = await ensureWorkspaceLibraryConfigured(true);
+  if (!libraryReady) {
+    error.value = "Set a workspace library before importing a workspace.";
+    return;
+  }
+
+  if (!window.api?.ui?.pickDirectory || !window.api?.workspace?.importToLibrary) {
+    error.value = "Workspace import APIs are not available";
+    return;
+  }
+
+  const sourcePath = await window.api.ui.pickDirectory(workspaceLibraryPath.value || undefined);
+  if (!sourcePath) {
+    return;
+  }
+
+  loading.value = true;
+  error.value = null;
+
+  try {
+    const result = await window.api.workspace.importToLibrary(sourcePath);
+    if (!result.ok || !result.data) {
+      error.value = String(result.error ?? "Failed to import workspace into library");
+      return;
+    }
+
+    await bootstrapWorkspaceContext(result.data);
+    await rememberLastOpenedWorkspace(result.data.workingDir);
+    await refreshWorkspaceLibrary({ restoreLastSelection: false, silent: true });
+    info.value = `Imported workspace into library: ${result.data.name}`;
+  } finally {
+    loading.value = false;
+  }
 };
 
 const submitRepoNamePrompt = () => {
@@ -678,6 +982,8 @@ const handleSyncToGitHub = async () => {
 const bootstrapWorkspaceContext = async (workspace: WorkspaceProject) => {
   currentWorkspace.value = workspace;
   workingPath.value = workspace.workingDir;
+  workspaceName.value = workspace.name;
+  workspaceDescription.value = workspace.description || "";
   zipArchiveName.value = normalizeZipArchiveName(fileNameFromPath(workspace.zipPath), workspace.name);
   openCorLaunchUrl.value = null;
   info.value = `Workspace loaded at ${workspace.workingDir}`;
@@ -686,40 +992,14 @@ const bootstrapWorkspaceContext = async (workspace: WorkspaceProject) => {
 };
 
 const handleCreateWorkspace = async (name: string) => {
-  if (!window.api?.workspace?.create) {
+  if (!window.api?.workspace?.createInLibrary) {
     error.value = "API not available";
     return;
   }
 
-  loading.value = true;
-  error.value = null;
-  info.value = null;
-
-  try {
-    const workingDir = workingPath.value.trim();
-    if (!workingDir) {
-      error.value = "Please provide a working directory path.";
-      return;
-    }
-
-    const result = await window.api.workspace.create(name, workingDir);
-
-    if (result.ok && result.data) {
-      await bootstrapWorkspaceContext(result.data);
-      return;
-    }
-
-    error.value = String(result.error ?? "Failed to create workspace");
-  } catch (caughtError) {
-    error.value = caughtError instanceof Error ? caughtError.message : "Unknown error";
-  } finally {
-    loading.value = false;
-  }
-};
-
-const handleOpenWorkspace = async () => {
-  if (!window.api?.workspace?.open) {
-    error.value = "Workspace open API not available";
+  const libraryReady = await ensureWorkspaceLibraryConfigured(true);
+  if (!libraryReady) {
+    error.value = "Set a workspace library before creating a workspace.";
     return;
   }
 
@@ -728,19 +1008,22 @@ const handleOpenWorkspace = async () => {
   info.value = null;
 
   try {
-    const targetPath = workingPath.value.trim();
-    if (!targetPath) {
-      error.value = "Please provide a directory to open.";
+    const trimmedName = name.trim();
+    if (!trimmedName) {
+      error.value = "Please provide a workspace name.";
       return;
     }
 
-    const result = await window.api.workspace.open(targetPath);
+    const result = await window.api.workspace.createInLibrary(trimmedName);
+
     if (result.ok && result.data) {
       await bootstrapWorkspaceContext(result.data);
+      await rememberLastOpenedWorkspace(result.data.workingDir);
+      await refreshWorkspaceLibrary({ restoreLastSelection: false, silent: true });
       return;
     }
 
-    error.value = String(result.error ?? "Failed to open workspace");
+    error.value = String(result.error ?? "Failed to create workspace");
   } catch (caughtError) {
     error.value = caughtError instanceof Error ? caughtError.message : "Unknown error";
   } finally {
@@ -915,30 +1198,6 @@ const onDragOver = (event: DragEvent) => {
 
 const onDragLeave = () => {
   dragActive.value = false;
-};
-
-const pickWorkingDirectory = async () => {
-  if (!window.api?.ui?.pickDirectory) {
-    error.value = "Native folder picker API not available";
-    return;
-  }
-
-  const selectedPath = await window.api.ui.pickDirectory(workingPath.value);
-  if (selectedPath) {
-    workingPath.value = selectedPath;
-  }
-};
-
-const pickOpenDirectory = async () => {
-  if (!window.api?.ui?.pickDirectory) {
-    error.value = "Native folder picker API not available";
-    return;
-  }
-
-  const selectedPath = await window.api.ui.pickDirectory(workingPath.value);
-  if (selectedPath) {
-    workingPath.value = selectedPath;
-  }
 };
 
 const pickImportSources = async () => {
@@ -1145,21 +1404,46 @@ const handleCopyOpenCorUrl = async () => {
 };
 
 const handleMenuNewWorkspace = async () => {
-  await pickWorkingDirectory();
-  if (!workingPath.value.trim()) {
-    return;
-  }
-
   await handleCreateWorkspace(workspaceName.value || "My Workspace");
 };
 
 const handleMenuOpenWorkspace = async () => {
-  await pickOpenDirectory();
-  if (!workingPath.value.trim()) {
+  const libraryReady = await ensureWorkspaceLibraryConfigured(true);
+  if (!libraryReady) {
+    error.value = "Set a workspace library before opening a workspace.";
     return;
   }
 
-  await handleOpenWorkspace();
+  await refreshWorkspaceLibrary({ restoreLastSelection: false, silent: true });
+
+  if (workspaceLibraryWorkspaces.value.length === 0) {
+    info.value = "No workspaces found in the library. Create one or use Import Workspace.";
+    return;
+  }
+
+  if (workspaceLibraryWorkspaces.value.length === 1) {
+    await openWorkspaceByPath(workspaceLibraryWorkspaces.value[0].workingDir);
+    return;
+  }
+
+  if (!window.api?.ui?.selectWorkspace) {
+    info.value = "Use the workspace browser on the left to choose a workspace.";
+    return;
+  }
+
+  const selectedIndex = await window.api.ui.selectWorkspace(
+    workspaceLibraryWorkspaces.value.map((workspace) => workspace.name)
+  );
+
+  if (selectedIndex === null || selectedIndex < 0 || selectedIndex >= workspaceLibraryWorkspaces.value.length) {
+    return;
+  }
+
+  await openWorkspaceByPath(workspaceLibraryWorkspaces.value[selectedIndex].workingDir);
+};
+
+const handleMenuSetWorkspaceLibrary = async () => {
+  await chooseWorkspaceLibrary();
 };
 
 const handleMenuNewWorkspaceGitHub = async () => {
@@ -1232,29 +1516,30 @@ const handleMenuOpenWorkspaceGitHub = async () => {
     return;
   }
 
+  const libraryReady = await ensureWorkspaceLibraryConfigured(true);
+  if (!libraryReady) {
+    error.value = "Set a workspace library before cloning a GitHub repository.";
+    return;
+  }
+
   const repoUrl = await chooseGitHubRepoUrl(githubSession.value);
   if (!repoUrl) {
     info.value = "Repository linking skipped.";
     return;
   }
 
-  const selectedPath = await window.api.ui.pickDirectory(workingPath.value);
-  if (!selectedPath) {
-    info.value = "Open from GitHub cancelled.";
-    return;
-  }
-
-  workingPath.value = selectedPath;
-
   if (!window.api?.github?.cloneRepository) {
     error.value = "GitHub clone API not available";
     return;
   }
 
+  const targetPath = joinFileSystemPath(workspaceLibraryPath.value, slugFromRepositoryUrl(repoUrl));
+  workingPath.value = targetPath;
+
   const cloneResult = await window.api.github.cloneRepository(
     toRaw(githubSession.value)!,
     repoUrl,
-    selectedPath
+    targetPath
   );
 
   if (!cloneResult.ok || !cloneResult.data) {
@@ -1278,6 +1563,10 @@ const handleMenuOpenWorkspaceGitHub = async () => {
   };
 
   await bootstrapWorkspaceContext(linkedWorkspace);
+  if (isPathInsideDirectory(linkedWorkspace.workingDir, workspaceLibraryPath.value)) {
+    await rememberLastOpenedWorkspace(linkedWorkspace.workingDir);
+    await refreshWorkspaceLibrary({ restoreLastSelection: false, silent: true });
+  }
 
   info.value = `Cloned and opened GitHub repository: ${repoUrl}`;
 };
@@ -1353,6 +1642,7 @@ const handleReviewPermissions = async () => {
 
 let detachMenuNew: (() => void) | undefined;
 let detachMenuOpen: (() => void) | undefined;
+let detachMenuSetWorkspaceLibrary: (() => void) | undefined;
 let detachMenuNewGitHub: (() => void) | undefined;
 let detachMenuOpenGitHub: (() => void) | undefined;
 let detachGitHubAuthProgress: (() => void) | undefined;
@@ -1360,6 +1650,7 @@ let detachGitHubAuthProgress: (() => void) | undefined;
 onMounted(async () => {
   detachMenuNew = window.api?.events?.onMenuNewWorkspace?.(handleMenuNewWorkspace);
   detachMenuOpen = window.api?.events?.onMenuOpenWorkspace?.(handleMenuOpenWorkspace);
+  detachMenuSetWorkspaceLibrary = window.api?.events?.onMenuSetWorkspaceLibrary?.(handleMenuSetWorkspaceLibrary);
   detachMenuNewGitHub = window.api?.events?.onMenuNewWorkspaceGitHub?.(handleMenuNewWorkspaceGitHub);
   detachMenuOpenGitHub = window.api?.events?.onMenuOpenWorkspaceGitHub?.(handleMenuOpenWorkspaceGitHub);
   detachGitHubAuthProgress = window.api?.events?.onGitHubAuthProgress?.((details) => {
@@ -1399,6 +1690,40 @@ onMounted(async () => {
   } catch (caughtError) {
     console.error("Failed to restore GitHub session", caughtError);
   }
+
+  await refreshWorkspaceLibrary({ restoreLastSelection: false, silent: true });
+
+  if (!initialLibrarySelectionResolved) {
+    await refreshWorkspaceLibrary({ restoreLastSelection: true, silent: true });
+  }
+
+  restartWorkspaceLibraryRefreshTimer();
+
+  const focusListener = () => {
+    void refreshWorkspaceLibrary({ restoreLastSelection: false, silent: true });
+    restartWorkspaceLibraryRefreshTimer();
+  };
+
+  const blurListener = () => {
+    restartWorkspaceLibraryRefreshTimer();
+  };
+
+  const visibilityListener = () => {
+    restartWorkspaceLibraryRefreshTimer();
+  };
+
+  window.addEventListener("focus", focusListener);
+  window.addEventListener("blur", blurListener);
+  document.addEventListener("visibilitychange", visibilityListener);
+
+  removeWorkspaceLibraryFocusListener = () => {
+    window.removeEventListener("focus", focusListener);
+    window.removeEventListener("blur", blurListener);
+  };
+
+  removeWorkspaceLibraryVisibilityListener = () => {
+    document.removeEventListener("visibilitychange", visibilityListener);
+  };
 });
 
 onBeforeUnmount(() => {
@@ -1414,9 +1739,73 @@ onBeforeUnmount(() => {
 
   detachMenuNew?.();
   detachMenuOpen?.();
+  detachMenuSetWorkspaceLibrary?.();
   detachMenuNewGitHub?.();
   detachMenuOpenGitHub?.();
   detachGitHubAuthProgress?.();
+
+  if (workspaceLibraryRefreshTimer !== undefined) {
+    window.clearInterval(workspaceLibraryRefreshTimer);
+  }
+
+  removeWorkspaceLibraryFocusListener?.();
+  removeWorkspaceLibraryVisibilityListener?.();
+});
+
+// Watch for workspace metadata changes and persist them
+let pendingNameUpdate: ReturnType<typeof setTimeout> | undefined;
+let pendingDescriptionUpdate: ReturnType<typeof setTimeout> | undefined;
+
+const saveWorkspaceMetadata = async () => {
+  if (!currentWorkspace.value) {
+    return;
+  }
+
+  const updates: { name?: string; description?: string } = {};
+  if (workspaceName.value.trim() && workspaceName.value !== currentWorkspace.value.name) {
+    updates.name = workspaceName.value.trim();
+  }
+  if (workspaceDescription.value !== (currentWorkspace.value.description || "")) {
+    updates.description = workspaceDescription.value;
+  }
+
+  if (Object.keys(updates).length === 0) {
+    return;
+  }
+
+  try {
+    const result = await window.api.workspace.updateMetadata(currentWorkspace.value.workingDir, updates);
+    if (result.ok && result.data) {
+      if (updates.name) {
+        currentWorkspace.value.name = updates.name;
+      }
+      if (updates.description !== undefined) {
+        currentWorkspace.value.description = updates.description;
+      }
+    } else {
+      console.error("Failed to update workspace metadata", result.error);
+    }
+  } catch (err) {
+    console.error("Error updating workspace metadata", err);
+  }
+};
+
+watch(workspaceName, () => {
+  if (pendingNameUpdate !== undefined) {
+    clearTimeout(pendingNameUpdate);
+  }
+  pendingNameUpdate = setTimeout(() => {
+    void saveWorkspaceMetadata();
+  }, 1000); // Debounce for 1 second
+});
+
+watch(workspaceDescription, () => {
+  if (pendingDescriptionUpdate !== undefined) {
+    clearTimeout(pendingDescriptionUpdate);
+  }
+  pendingDescriptionUpdate = setTimeout(() => {
+    void saveWorkspaceMetadata();
+  }, 1000); // Debounce for 1 second
 });
 </script>
 
@@ -1433,7 +1822,7 @@ onBeforeUnmount(() => {
             <p class="eyebrow">A manager for PMR workspaces and OMEX/COMBINE packages</p>
           </div>
         </div>
-        <p v-if="currentWorkspace" class="project-name">{{ currentWorkspace.name }}</p>
+        <!-- <p v-if="currentWorkspace" class="project-name">{{ currentWorkspace.name }}</p> -->
       </div>
 
       <div class="account-panel">
@@ -1554,16 +1943,117 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
+      <aside class="workspace-browser-panel">
+        <PCard>
+          <template #title>Workspace library</template>
+          <template #content>
+            <div class="workspace-browser-shell">
+              <div class="workspace-browser-head-row">
+                <p class="menu-hint">
+                  Choose one library folder and use it as the home for all managed workspaces.
+                </p>
+                <PButton
+                  icon="pi pi-download"
+                  text
+                  rounded
+                  size="small"
+                  title="Import workspace"
+                  aria-label="Import workspace"
+                  :disabled="!workspaceLibraryPath || loading"
+                  @click="handleImportWorkspaceToLibrary"
+                />
+              </div>
+
+              <div v-if="workspaceLibraryPath" class="library-path-row" :title="workspaceLibraryPath">
+                <span class="library-path-value">{{ workspaceLibraryPath }}</span>
+                <PButton
+                  icon="pi pi-pencil"
+                  text
+                  rounded
+                  size="small"
+                  title="Change library location"
+                  aria-label="Change library location"
+                  @click="chooseWorkspaceLibrary"
+                />
+              </div>
+              <div v-else class="workspace-library-empty-home">
+                <p class="empty-state">Select a workspace library to browse, create, and discover local workspaces.</p>
+                <PButton
+                  label="Open library"
+                  icon="pi pi-folder-open"
+                  severity="secondary"
+                  @click="chooseWorkspaceLibrary"
+                />
+              </div>
+
+              <div class="workspace-browser-scroll">
+                <div v-if="workspaceLibraryPath && !workspaceLibraryInitialized" class="empty-state">
+                  Discovering workspaces in your library...
+                </div>
+                <div v-else-if="workspaceLibraryPath && workspaceLibraryWorkspaces.length === 0" class="empty-state">
+                  No valid workspaces were found in this library yet. Use File -&gt; New Workspace to create one.
+                </div>
+                <ul v-else-if="workspaceLibraryPath" class="workspace-browser-list">
+                  <li v-for="workspace in workspaceLibraryWorkspaces" :key="workspace.workingDir">
+                    <button
+                      type="button"
+                      class="workspace-browser-item"
+                      :class="{
+                        'workspace-browser-item--active':
+                          normalizeComparablePath(currentWorkspace?.workingDir ?? null) ===
+                          normalizeComparablePath(workspace.workingDir),
+                      }"
+                      :disabled="loading"
+                      @click="openWorkspaceByPath(workspace.workingDir)"
+                    >
+                      <span class="workspace-browser-name-row">
+                        <span class="workspace-browser-name">{{ workspace.name }}</span>
+                        <span class="workspace-browser-badges">
+                          <span
+                            v-for="badge in workspaceStatusBadgesFor(workspace)"
+                            :key="`${workspace.workingDir}-${badge.label}`"
+                            class="workspace-browser-badge"
+                            :class="`workspace-browser-badge--${badge.kind}`"
+                          >
+                            {{ badge.label }}
+                          </span>
+                        </span>
+                      </span>
+                      <span class="workspace-browser-meta">
+                        Branch: {{ workspace.gitBranch || "main" }}
+                      </span>
+                      <span v-if="workspace.gitRepoUrl" class="workspace-browser-repo" :title="workspace.gitRepoUrl">
+                        {{ trimDisplayUrl(workspace.gitRepoUrl, 52) }}
+                      </span>
+                    </button>
+                  </li>
+                </ul>
+              </div>
+            </div>
+          </template>
+        </PCard>
+      </aside>
+
+      <div class="workspace-main">
       <section class="hero-card">
         <PCard>
           <template #title>Workspace overview</template>
           <template #content>
-            <p class="menu-hint">Use the File menu to create a new workspace or open an existing one.</p>
+            <p class="menu-hint">Use the workspace browser on the left to switch workspaces, or the File menu to create one.</p>
             <div class="field-grid">
               <label class="field-label" for="workspaceName">Workspace name</label>
               <input id="workspaceName" v-model="workspaceName" class="field-input" type="text" />
 
-              <label class="field-label" for="workingPath">Workspace location</label>
+              <label class="field-label" for="workspaceDescription">Description</label>
+              <textarea
+                id="workspaceDescription"
+                v-model="workspaceDescription"
+                class="field-input field-textarea"
+                rows="4"
+                placeholder="Enter a brief description of this workspace..."
+              />
+
+              <label class="field-label" for="workingPath">Current workspace location</label>
               <input
                 id="workingPath"
                 v-model="workingPath"
@@ -1828,6 +2318,7 @@ onBeforeUnmount(() => {
           </template>
         </PCard>
       </section>
+      </div>
     </main>
 
     <section class="activity-log-panel" aria-live="polite" aria-label="Activity log">
@@ -2012,11 +2503,52 @@ h1 {
 
 .content-grid {
   display: grid;
+  grid-template-columns: minmax(260px, 320px) minmax(0, 1fr);
+  gap: 1.25rem;
+  min-height: 0;
+  overflow: hidden;
+  align-content: start;
+  padding-right: 0.2rem;
+}
+
+.workspace-browser-panel {
+  min-width: 0;
+  position: sticky;
+  top: 0;
+  align-self: stretch;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.workspace-browser-panel :deep(.p-card) {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.workspace-browser-panel :deep(.p-card-body) {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+}
+
+.workspace-browser-panel :deep(.p-card-content) {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+}
+
+.workspace-main {
+  min-width: 0;
+  display: grid;
   grid-template-columns: 1fr;
   gap: 1.25rem;
   min-height: 0;
   overflow: auto;
-  align-content: start;
   padding-right: 0.2rem;
 }
 
@@ -2032,6 +2564,164 @@ h1 {
 .git-panel,
 .artifacts-panel {
   grid-column: 1 / -1;
+}
+
+.browser-field-grid {
+  grid-template-columns: 1fr;
+}
+
+.workspace-browser-shell {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  gap: 0.6rem;
+  min-height: 0;
+  height: 100%;
+  flex: 1;
+}
+
+.workspace-browser-head-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.workspace-browser-head-row .menu-hint {
+  margin: 0;
+}
+
+.library-path-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.3rem;
+  align-items: center;
+  border: 1px solid #b8c4cf;
+  border-radius: 10px;
+  padding: 0.35rem 0.45rem 0.35rem 0.6rem;
+  background: rgba(245, 248, 250, 0.96);
+}
+
+.library-path-value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #465a72;
+  font-size: 0.88rem;
+}
+
+.workspace-library-empty-home {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.workspace-library-empty-home .empty-state {
+  margin: 0;
+}
+
+.workspace-browser-scroll {
+  min-height: 0;
+  overflow: auto;
+  padding-right: 0.2rem;
+}
+
+.workspace-browser-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.workspace-browser-item {
+  width: 100%;
+  text-align: left;
+  display: grid;
+  gap: 0.25rem;
+  border: 1px solid rgba(24, 33, 47, 0.12);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.82);
+  padding: 0.75rem 0.85rem;
+  cursor: pointer;
+  transition: border-color 0.18s ease, background-color 0.18s ease, transform 0.18s ease;
+}
+
+.workspace-browser-item:hover:not(:disabled) {
+  border-color: #1b6fd1;
+  background: rgba(238, 245, 255, 0.96);
+  transform: translateY(-1px);
+}
+
+.workspace-browser-item:disabled {
+  cursor: not-allowed;
+  opacity: 0.72;
+}
+
+.workspace-browser-item--active {
+  border-color: #1b6fd1;
+  background: rgba(226, 239, 255, 0.95);
+  box-shadow: inset 0 0 0 1px rgba(27, 111, 209, 0.16);
+}
+
+.workspace-browser-name-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.workspace-browser-badges {
+  display: inline-flex;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.workspace-browser-name {
+  font-weight: 700;
+  color: #1f2d3d;
+}
+
+.workspace-browser-badge {
+  border-radius: 999px;
+  padding: 0.15rem 0.45rem;
+  background: rgba(27, 111, 209, 0.15);
+  color: #16539d;
+  font-size: 0.74rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.workspace-browser-badge--current {
+  background: rgba(27, 111, 209, 0.2);
+  color: #16539d;
+}
+
+.workspace-browser-badge--dirty {
+  background: rgba(190, 68, 27, 0.2);
+  color: #8f2f0c;
+}
+
+.workspace-browser-badge--clean {
+  background: rgba(39, 125, 74, 0.18);
+  color: #1f6f43;
+}
+
+.workspace-browser-badge--github {
+  background: rgba(53, 53, 74, 0.16);
+  color: #2d2d43;
+}
+
+.workspace-browser-meta,
+.workspace-browser-repo {
+  color: #5a6d84;
+  font-size: 0.86rem;
+}
+
+.workspace-browser-repo {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .field-grid {
@@ -2068,6 +2758,13 @@ h1 {
   cursor: default;
   color: #465a72;
   background: rgba(245, 248, 250, 0.96);
+}
+
+.field-textarea {
+  font-family: inherit;
+  resize: vertical;
+  min-height: 100px;
+  font-size: 0.95rem;
 }
 
 .input-row {
@@ -2443,6 +3140,33 @@ h1 {
 
   .content-grid {
     grid-template-columns: 1fr;
+    overflow: auto;
+  }
+
+  .workspace-browser-panel {
+    position: static;
+    height: auto;
+    min-height: 0;
+    overflow: visible;
+  }
+
+  .workspace-browser-panel :deep(.p-card),
+  .workspace-browser-panel :deep(.p-card-body),
+  .workspace-browser-panel :deep(.p-card-content) {
+    height: auto;
+    min-height: 0;
+    display: block;
+  }
+
+  .workspace-main {
+    overflow: visible;
+    padding-right: 0;
+  }
+
+  .workspace-browser-scroll {
+    max-height: none;
+    overflow: visible;
+    padding-right: 0;
   }
 
   .field-grid {
