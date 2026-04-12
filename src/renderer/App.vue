@@ -48,6 +48,10 @@ const repoBrowserLoading = ref(false);
 const repoBrowserLoadError = ref<string | null>(null);
 const repoBrowserSessionForRetry = ref<GitHubSession | null>(null);
 const githubOAuthApplicationId = ref<string | null>(null);
+const showGitHubDeviceCodeModal = ref(false);
+const githubDeviceCode = ref("");
+const githubVerificationUrl = ref("");
+const githubDeviceCodeCopied = ref(false);
 let resolveRepoBrowser: ((value: string | null) => void) | null = null;
 const manifestFormatsByPath = ref<Record<string, string>>({});
 const manifestExcludedByPath = ref<Record<string, boolean>>({});
@@ -1446,6 +1450,62 @@ const handleMenuSetWorkspaceLibrary = async () => {
   await chooseWorkspaceLibrary();
 };
 
+const resetWorkspaceSessionState = () => {
+  currentWorkspace.value = null;
+  workspaceName.value = "My Workspace";
+  workspaceDescription.value = "";
+  workingPath.value = "";
+  zipArchiveName.value = "omex-workspace.zip";
+  openCorLaunchUrl.value = null;
+  files.value = [];
+  changeSet.value = null;
+  commitSuggestion.value = null;
+  commitSummary.value = "";
+  commitDescription.value = "";
+  manifestFormatsByPath.value = {};
+  manifestExcludedByPath.value = {};
+  manifestMasterPath.value = null;
+  manifestUseCustomTypeByPath.value = {};
+  manifestCustomTypeByPath.value = {};
+};
+
+const handleMenuResetSession = async () => {
+  loading.value = true;
+  error.value = null;
+
+  try {
+    if (window.api?.github?.logout) {
+      await window.api.github.logout();
+    }
+    githubSession.value = null;
+
+    if (window.api?.workspace?.clearLibrarySettings) {
+      const clearResult = await window.api.workspace.clearLibrarySettings();
+      if (!clearResult.ok) {
+        throw new Error(String(clearResult.error ?? "Failed to clear workspace library settings"));
+      }
+      syncWorkspaceLibrarySettings(
+        clearResult.data?.libraryPath ?? null,
+        clearResult.data?.lastOpenedWorkspacePath ?? null
+      );
+    } else {
+      syncWorkspaceLibrarySettings(null, null);
+    }
+
+    workspaceLibraryWorkspaces.value.splice(0, workspaceLibraryWorkspaces.value.length);
+    workspaceLibraryInitialized.value = false;
+    initialLibrarySelectionResolved = false;
+
+    resetWorkspaceSessionState();
+    await refreshWorkspaceLibrary({ restoreLastSelection: false, silent: true });
+    info.value = "Session reset complete. GitHub signed out and workspace library cleared.";
+  } catch (caughtError) {
+    error.value = caughtError instanceof Error ? caughtError.message : "Unable to reset session";
+  } finally {
+    loading.value = false;
+  }
+};
+
 const handleMenuNewWorkspaceGitHub = async () => {
   if (!githubSession.value) {
     error.value = "Sign in to GitHub before using New from GitHub.";
@@ -1579,6 +1639,8 @@ const handleGitHubLogin = async () => {
 
   loading.value = true;
   isAuthenticating.value = true;
+  showGitHubDeviceCodeModal.value = false;
+  githubDeviceCodeCopied.value = false;
   error.value = null;
 
   try {
@@ -1595,11 +1657,48 @@ const handleGitHubLogin = async () => {
   } finally {
     loading.value = false;
     isAuthenticating.value = false;
+    showGitHubDeviceCodeModal.value = false;
   }
 };
 
 const handleCancelAuth = async () => {
+  showGitHubDeviceCodeModal.value = false;
   await window.api?.github?.cancelAuth?.().catch(() => {});
+};
+
+const handleCopyGitHubDeviceCode = async () => {
+  if (!githubDeviceCode.value) {
+    return;
+  }
+
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(githubDeviceCode.value);
+    } else {
+      const fallbackInput = document.createElement("textarea");
+      fallbackInput.value = githubDeviceCode.value;
+      fallbackInput.setAttribute("readonly", "readonly");
+      fallbackInput.style.position = "absolute";
+      fallbackInput.style.left = "-9999px";
+      document.body.appendChild(fallbackInput);
+      fallbackInput.select();
+      document.execCommand("copy");
+      document.body.removeChild(fallbackInput);
+    }
+
+    githubDeviceCodeCopied.value = true;
+    info.value = "GitHub device code copied to clipboard.";
+  } catch (caughtError) {
+    error.value = caughtError instanceof Error ? caughtError.message : "Unable to copy GitHub device code";
+  }
+};
+
+const handleOpenGitHubDeviceAuthorizationPage = async () => {
+  if (!githubVerificationUrl.value) {
+    return;
+  }
+
+  await window.api?.ui?.openExternal?.(githubVerificationUrl.value);
 };
 
 const handleAuthExpired = () => {
@@ -1643,6 +1742,7 @@ const handleReviewPermissions = async () => {
 let detachMenuNew: (() => void) | undefined;
 let detachMenuOpen: (() => void) | undefined;
 let detachMenuSetWorkspaceLibrary: (() => void) | undefined;
+let detachMenuResetSession: (() => void) | undefined;
 let detachMenuNewGitHub: (() => void) | undefined;
 let detachMenuOpenGitHub: (() => void) | undefined;
 let detachGitHubAuthProgress: (() => void) | undefined;
@@ -1651,22 +1751,32 @@ onMounted(async () => {
   detachMenuNew = window.api?.events?.onMenuNewWorkspace?.(handleMenuNewWorkspace);
   detachMenuOpen = window.api?.events?.onMenuOpenWorkspace?.(handleMenuOpenWorkspace);
   detachMenuSetWorkspaceLibrary = window.api?.events?.onMenuSetWorkspaceLibrary?.(handleMenuSetWorkspaceLibrary);
+  detachMenuResetSession = window.api?.events?.onMenuResetSession?.(handleMenuResetSession);
   detachMenuNewGitHub = window.api?.events?.onMenuNewWorkspaceGitHub?.(handleMenuNewWorkspaceGitHub);
   detachMenuOpenGitHub = window.api?.events?.onMenuOpenWorkspaceGitHub?.(handleMenuOpenWorkspaceGitHub);
   detachGitHubAuthProgress = window.api?.events?.onGitHubAuthProgress?.((details) => {
     if (details.stage === "error") {
+      showGitHubDeviceCodeModal.value = false;
       error.value = details.message;
       return;
     }
 
     if (details.stage === "device_code") {
       const verificationUrl = details.verificationUriComplete || details.verificationUri || "";
+      githubDeviceCode.value = details.userCode || "";
+      githubVerificationUrl.value = verificationUrl;
+      githubDeviceCodeCopied.value = false;
+      showGitHubDeviceCodeModal.value = true;
       info.value = [
         details.message,
         `GitHub device code: ${details.userCode || "(not provided)"}`,
         `Authorize at: ${verificationUrl}`,
       ].join("\n");
       return;
+    }
+
+    if (details.stage === "success") {
+      showGitHubDeviceCodeModal.value = false;
     }
 
     info.value = details.message;
@@ -1740,6 +1850,7 @@ onBeforeUnmount(() => {
   detachMenuNew?.();
   detachMenuOpen?.();
   detachMenuSetWorkspaceLibrary?.();
+  detachMenuResetSession?.();
   detachMenuNewGitHub?.();
   detachMenuOpenGitHub?.();
   detachGitHubAuthProgress?.();
@@ -1872,6 +1983,46 @@ watch(workspaceDescription, () => {
     </header>
 
     <main class="content-grid">
+      <div v-if="showGitHubDeviceCodeModal" class="modal-backdrop">
+        <div class="modal-panel" @click.stop>
+          <h3 class="modal-title">Complete GitHub sign-in</h3>
+          <p class="menu-hint">
+            Enter this device code on GitHub to continue authorization.
+          </p>
+
+          <div class="auth-device-code-row">
+            <code class="auth-device-code-value">{{ githubDeviceCode || "(not provided)" }}</code>
+            <PButton
+              icon="pi pi-copy"
+              text
+              rounded
+              size="small"
+              title="Copy code"
+              aria-label="Copy code"
+              :disabled="!githubDeviceCode"
+              @click="handleCopyGitHubDeviceCode"
+            />
+          </div>
+
+          <p v-if="githubDeviceCodeCopied" class="auth-device-code-copied">Copied to clipboard.</p>
+
+          <p class="menu-hint" v-if="githubVerificationUrl">
+            Authorize at: {{ githubVerificationUrl }}
+          </p>
+
+          <div class="hero-actions">
+            <PButton
+              label="Open GitHub page"
+              icon="pi pi-external-link"
+              severity="secondary"
+              :disabled="!githubVerificationUrl"
+              @click="handleOpenGitHubDeviceAuthorizationPage"
+            />
+            <PButton label="Cancel" severity="secondary" @click="handleCancelAuth" />
+          </div>
+        </div>
+      </div>
+
       <div v-if="showRepoNamePrompt" class="modal-backdrop" @click="cancelRepoNamePrompt">
         <div class="modal-panel" @click.stop>
           <h3 class="modal-title">{{ repoNamePromptTitle }}</h3>
@@ -2978,6 +3129,33 @@ h1 {
 
 .modal-panel--wide {
   width: min(900px, calc(100vw - 2rem));
+}
+
+.auth-device-code-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.35rem;
+  border: 1px solid #b8c4cf;
+  border-radius: 10px;
+  background: rgba(245, 248, 250, 0.96);
+  padding: 0.35rem 0.45rem 0.35rem 0.7rem;
+  margin: 0.65rem 0 0.45rem;
+}
+
+.auth-device-code-value {
+  font-family: "Consolas", "Courier New", monospace;
+  font-size: 1.05rem;
+  letter-spacing: 0.08em;
+  font-weight: 700;
+  color: #1f2d3d;
+}
+
+.auth-device-code-copied {
+  margin: 0 0 0.35rem;
+  color: #1f6f43;
+  font-size: 0.88rem;
+  font-weight: 600;
 }
 
 .repo-browser-toolbar {

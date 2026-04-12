@@ -15,6 +15,7 @@ interface RendererApi {
     open: (workingDir: string) => Promise<IpcResult<import("@domain/models").WorkspaceProject>>;
     getLibrarySettings: () => Promise<IpcResult<import("@domain/models").WorkspaceLibrarySettings>>;
     setLibraryPath: (libraryPath: string) => Promise<IpcResult<import("@domain/models").WorkspaceLibrarySettings>>;
+    clearLibrarySettings: () => Promise<IpcResult<import("@domain/models").WorkspaceLibrarySettings>>;
     listLibraryWorkspaces: () => Promise<IpcResult<import("@domain/models").WorkspaceProject[]>>;
     importToLibrary: (sourceWorkspaceDir: string) => Promise<IpcResult<import("@domain/models").WorkspaceProject>>;
     rememberLastOpened: (workingDir: string | null) => Promise<IpcResult<void>>;
@@ -94,6 +95,7 @@ interface RendererApi {
     onMenuNewWorkspace: (callback: () => void) => () => void;
     onMenuOpenWorkspace: (callback: () => void) => () => void;
     onMenuSetWorkspaceLibrary: (callback: () => void) => () => void;
+    onMenuResetSession: (callback: () => void) => () => void;
     onMenuNewWorkspaceGitHub: (callback: () => void) => () => void;
     onMenuOpenWorkspaceGitHub: (callback: () => void) => () => void;
     onGitHubAuthProgress: (

@@ -310,6 +310,16 @@ export class WorkspaceService {
     }
   }
 
+  async clearWorkspaceLibrarySettings(): Promise<OperationResult<WorkspaceLibrarySettings>> {
+    try {
+      this.store.set("libraryPath", null);
+      this.store.set("lastOpenedWorkspacePath", null);
+      return { ok: true, data: this.readWorkspaceLibrarySettings() };
+    } catch (error) {
+      return { ok: false, error };
+    }
+  }
+
   async rememberLastOpenedWorkspace(
     workingDir: string | null
   ): Promise<OperationResult<void>> {

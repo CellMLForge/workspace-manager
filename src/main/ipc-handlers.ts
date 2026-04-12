@@ -46,6 +46,10 @@ ipcMain.handle("workspace:setLibraryPath", async (event, libraryPath: string) =>
   return workspaceService.setWorkspaceLibraryPath(libraryPath);
 });
 
+ipcMain.handle("workspace:clearLibrarySettings", async () => {
+  return workspaceService.clearWorkspaceLibrarySettings();
+});
+
 ipcMain.handle("workspace:listLibraryWorkspaces", async () => {
   return workspaceService.listLibraryWorkspaces();
 });

@@ -80,3 +80,39 @@ test("updateWorkspaceMetadata bootstraps config when missing", async () => {
     await fs.rm(tempRoot, { recursive: true, force: true });
   }
 });
+
+test("clearWorkspaceLibrarySettings clears library path and last opened workspace", async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "cf-workspace-library-test-"));
+  const libraryDir = path.join(tempRoot, "library");
+  const workspacePath = path.join(libraryDir, "workspace-a");
+
+  try {
+    const setResult = await workspaceService.setWorkspaceLibraryPath(libraryDir);
+    assert.equal(setResult.ok, true, String(setResult.error || "setWorkspaceLibraryPath should succeed"));
+
+    const rememberResult = await workspaceService.rememberLastOpenedWorkspace(workspacePath);
+    assert.equal(
+      rememberResult.ok,
+      true,
+      String(rememberResult.error || "rememberLastOpenedWorkspace should succeed")
+    );
+
+    const beforeClear = await workspaceService.getWorkspaceLibrarySettings();
+    assert.equal(beforeClear.ok, true, String(beforeClear.error || "getWorkspaceLibrarySettings should succeed"));
+    assert.equal(beforeClear.data && beforeClear.data.libraryPath, path.resolve(libraryDir));
+    assert.equal(beforeClear.data && beforeClear.data.lastOpenedWorkspacePath, path.resolve(workspacePath));
+
+    const clearResult = await workspaceService.clearWorkspaceLibrarySettings();
+    assert.equal(clearResult.ok, true, String(clearResult.error || "clearWorkspaceLibrarySettings should succeed"));
+    assert.equal(clearResult.data && clearResult.data.libraryPath, null);
+    assert.equal(clearResult.data && clearResult.data.lastOpenedWorkspacePath, null);
+
+    const afterClear = await workspaceService.getWorkspaceLibrarySettings();
+    assert.equal(afterClear.ok, true, String(afterClear.error || "getWorkspaceLibrarySettings should succeed"));
+    assert.equal(afterClear.data && afterClear.data.libraryPath, null);
+    assert.equal(afterClear.data && afterClear.data.lastOpenedWorkspacePath, null);
+  } finally {
+    await fs.rm(tempRoot, { recursive: true, force: true });
+    await workspaceService.clearWorkspaceLibrarySettings();
+  }
+});

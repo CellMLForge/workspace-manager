@@ -7,7 +7,7 @@ import * as path from "path";
 import * as git from "isomorphic-git";
 import http from "isomorphic-git/http/node";
 import https from "https";
-import { clipboard, dialog, safeStorage, shell } from "electron";
+import { safeStorage, shell } from "electron";
 import { GitHubSession, OperationResult, PushContext } from "../domain/models";
 import { Octokit } from "@octokit/rest";
 import { githubAuthConfig } from "./github-config";
@@ -254,50 +254,11 @@ export class GitHubService {
 
       onProgress?.({
         stage: "device_code",
-        message: "GitHub device code received. Copy it now. If needed later, check the Activity log.",
+        message: "GitHub device code received. Use the copy icon next to the code, then authorize in your browser.",
         userCode,
         verificationUri,
         verificationUriComplete: verificationUriComplete || undefined,
       });
-
-      while (true) {
-        const dialogResult = await dialog.showMessageBox({
-          type: "info",
-          buttons: ["Copy code", "Continue", "Cancel"],
-          defaultId: 1,
-          cancelId: 2,
-          noLink: true,
-          title: "Complete GitHub sign-in",
-          message: "Copy your device code before opening the browser",
-          detail: [
-            `Code: ${userCode || "(not provided)"}`,
-            `Verification URL: ${verificationUri}`,
-            "",
-            "Tip: use Copy code now, then Continue.",
-            "If you forget the code, open the Activity log and copy it from there.",
-          ].join("\n"),
-        });
-
-        if (dialogResult.response === 2 || abort.cancelled) {
-          throw new Error("GitHub sign-in was cancelled.");
-        }
-
-        if (dialogResult.response === 0) {
-          if (userCode) {
-            clipboard.writeText(userCode);
-            onProgress?.({
-              stage: "device_code",
-              message: "Device code copied to clipboard. Continue to open the GitHub authorization page.",
-              userCode,
-              verificationUri,
-              verificationUriComplete: verificationUriComplete || undefined,
-            });
-          }
-          continue;
-        }
-
-        break;
-      }
 
       try {
         await shell.openExternal(authorizationUrl);

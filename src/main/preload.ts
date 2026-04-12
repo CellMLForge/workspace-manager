@@ -17,6 +17,8 @@ contextBridge.exposeInMainWorld("api", {
       ipcRenderer.invoke("workspace:getLibrarySettings"),
     setLibraryPath: (libraryPath: string) =>
       ipcRenderer.invoke("workspace:setLibraryPath", libraryPath),
+    clearLibrarySettings: () =>
+      ipcRenderer.invoke("workspace:clearLibrarySettings"),
     listLibraryWorkspaces: () =>
       ipcRenderer.invoke("workspace:listLibraryWorkspaces"),
     importToLibrary: (sourceWorkspaceDir: string) =>
@@ -153,6 +155,13 @@ contextBridge.exposeInMainWorld("api", {
       ipcRenderer.on("menu:set-workspace-library", listener);
       return () => {
         ipcRenderer.removeListener("menu:set-workspace-library", listener);
+      };
+    },
+    onMenuResetSession: (callback: () => void) => {
+      const listener = () => callback();
+      ipcRenderer.on("menu:reset-session", listener);
+      return () => {
+        ipcRenderer.removeListener("menu:reset-session", listener);
       };
     },
     onMenuNewWorkspaceGitHub: (callback: () => void) => {

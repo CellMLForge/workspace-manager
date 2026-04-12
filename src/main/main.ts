@@ -37,13 +37,6 @@ const buildApplicationMenu = () => {
           },
         },
         {
-          label: "Open Workspace",
-          accelerator: "CmdOrCtrl+O",
-          click: () => {
-            mainWindow?.webContents.send("menu:open-workspace");
-          },
-        },
-        {
           label: "New Workspace from GitHub...",
           accelerator: "CmdOrCtrl+Shift+N",
           click: () => {
@@ -51,7 +44,7 @@ const buildApplicationMenu = () => {
           },
         },
         {
-          label: "Open Workspace from GitHub...",
+          label: "Import Workspace from GitHub...",
           accelerator: "CmdOrCtrl+Shift+O",
           click: () => {
             mainWindow?.webContents.send("menu:open-workspace-github");
@@ -63,6 +56,12 @@ const buildApplicationMenu = () => {
           accelerator: "CmdOrCtrl+Shift+L",
           click: () => {
             mainWindow?.webContents.send("menu:set-workspace-library");
+          },
+        },
+        {
+          label: "Reset Session",
+          click: () => {
+            mainWindow?.webContents.send("menu:reset-session");
           },
         },
         { type: "separator" },
