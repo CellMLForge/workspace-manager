@@ -56,6 +56,17 @@ export interface WorkspaceLibrarySettings {
   lastOpenedWorkspacePath: string | null;
 }
 
+export interface SimulationExperimentManifest {
+  name: string;
+  description?: string;
+  manifestFileName: string;
+  manifestPath: string;
+  archiveFileName: string;
+  entryCount: number;
+  masterLocation?: string;
+  updatedAt: string;
+}
+
 // Represents a file or folder in the working tree
 export interface WorkingTreeFile {
   path: string; // relative within workspace

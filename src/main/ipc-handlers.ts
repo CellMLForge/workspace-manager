@@ -54,6 +54,25 @@ ipcMain.handle("workspace:listLibraryWorkspaces", async () => {
   return workspaceService.listLibraryWorkspaces();
 });
 
+ipcMain.handle("workspace:listSimulationExperimentManifests", async (event, workspace: WorkspaceProject) => {
+  return workspaceService.listSimulationExperimentManifests(workspace);
+});
+
+ipcMain.handle(
+  "workspace:createSimulationExperimentManifest",
+  async (
+    event,
+    workspace: WorkspaceProject,
+    options: {
+      name: string;
+      description?: string;
+      entries: Array<{ location: string; format: string; master?: boolean; description?: string }>;
+    }
+  ) => {
+    return workspaceService.createSimulationExperimentManifest(workspace, options);
+  }
+);
+
 ipcMain.handle("workspace:importToLibrary", async (event, sourceWorkspaceDir: string) => {
   return workspaceService.importWorkspaceToLibrary(sourceWorkspaceDir);
 });
@@ -271,6 +290,13 @@ ipcMain.handle(
   "zip:build",
   async (event, workingDir: string, outputPath: string, excludePaths?: string[]) => {
     return zipService.buildZip(workingDir, outputPath, excludePaths);
+  }
+);
+
+ipcMain.handle(
+  "zip:buildFromManifest",
+  async (event, workingDir: string, outputPath: string, manifestPath: string, metadata?: ManifestBuildMetadata) => {
+    return zipService.buildZipFromManifest(workingDir, outputPath, manifestPath, metadata);
   }
 );
 

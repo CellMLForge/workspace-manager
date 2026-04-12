@@ -5,8 +5,10 @@ const os = require("node:os");
 const path = require("node:path");
 const git = require("isomorphic-git");
 const fsNode = require("fs");
+const JSZip = require("jszip");
 
 const { workspaceService } = require("../dist/services/workspace");
+const { zipService } = require("../dist/services/zip");
 const packageJson = require("../package.json");
 
 const CONFIG_FILE_NAME = "cellmlforge-workspace-manager.json";
@@ -114,5 +116,77 @@ test("clearWorkspaceLibrarySettings clears library path and last opened workspac
   } finally {
     await fs.rm(tempRoot, { recursive: true, force: true });
     await workspaceService.clearWorkspaceLibrarySettings();
+  }
+});
+
+test("buildZipFromManifest includes only selected files and leaves source manifest unchanged", async () => {
+  const { tempRoot, workspaceDir } = await makeTempWorkspace();
+
+  try {
+    await fs.writeFile(path.join(workspaceDir, "protocol.sedml"), "<sedML />\n", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "model.cellml"), "<model />\n", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "notes.txt"), "Do not include me\n", "utf8");
+
+    const openResult = await workspaceService.openWorkspace(workspaceDir);
+    assert.equal(openResult.ok, true, String(openResult.error || "openWorkspace should succeed"));
+    const workspace = openResult.data;
+
+    const createManifestResult = await workspaceService.createSimulationExperimentManifest(workspace, {
+      name: "Example Experiment",
+      description: "Build only the model and protocol",
+      entries: [
+        {
+          location: "./protocol.sedml",
+          format: "http://identifiers.org/combine.specifications/sed-ml",
+          master: true,
+        },
+        {
+          location: "./model.cellml",
+          format: "http://identifiers.org/combine.specifications/cellml",
+        },
+      ],
+    });
+
+    assert.equal(
+      createManifestResult.ok,
+      true,
+      String(createManifestResult.error || "createSimulationExperimentManifest should succeed")
+    );
+
+    const experiment = createManifestResult.data;
+    const sourceManifestBeforeBuild = await fs.readFile(experiment.manifestPath, "utf8");
+    const zipPath = path.join(workspaceDir, ".omex-artifacts", "example-experiment.zip");
+
+    const zipResult = await zipService.buildZipFromManifest(
+      workspace.workingDir,
+      zipPath,
+      experiment.manifestPath,
+      {
+        generatedAt: new Date().toISOString(),
+        hasUncommittedChanges: false,
+        gitBranch: "main",
+        gitRevision: "abc123",
+      }
+    );
+
+    assert.equal(zipResult.ok, true, String(zipResult.error || "buildZipFromManifest should succeed"));
+
+    const sourceManifestAfterBuild = await fs.readFile(experiment.manifestPath, "utf8");
+    assert.equal(sourceManifestAfterBuild, sourceManifestBeforeBuild);
+    assert.equal(sourceManifestAfterBuild.includes("cellmlforge:hasUncommittedChanges"), false);
+
+    const zipBuffer = await fs.readFile(zipPath);
+    const zip = await JSZip.loadAsync(zipBuffer);
+    const zipEntries = Object.keys(zip.files).sort();
+
+    assert.deepEqual(zipEntries, ["manifest.xml", "model.cellml", "protocol.sedml"]);
+
+    const manifestXml = await zip.file("manifest.xml").async("string");
+    assert.equal(manifestXml.includes("cellmlforge:hasUncommittedChanges"), true);
+    assert.equal(manifestXml.includes("./protocol.sedml"), true);
+    assert.equal(manifestXml.includes("./model.cellml"), true);
+    assert.equal(manifestXml.includes("./notes.txt"), false);
+  } finally {
+    await fs.rm(tempRoot, { recursive: true, force: true });
   }
 });

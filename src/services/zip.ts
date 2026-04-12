@@ -5,7 +5,8 @@ import { createHash } from "crypto";
 import { promises as fs } from "fs";
 import * as path from "path";
 import JSZip from "jszip";
-import { ZipArtifact, Base64Artifact, OperationResult } from "../domain/models";
+import { ZipArtifact, Base64Artifact, ManifestBuildMetadata, OperationResult } from "../domain/models";
+import { manifestService } from "./manifest";
 
 const addDirectoryToZip = async (
   zip: JSZip,
@@ -70,6 +71,74 @@ export class ZipService {
 
       const zip = new JSZip();
       await addDirectoryToZip(zip, resolvedWorkingDir, "", excludeSet);
+
+      await fs.mkdir(path.dirname(resolvedOutputPath), { recursive: true });
+
+      const content = await zip.generateAsync({
+        type: "nodebuffer",
+        compression: "DEFLATE",
+        compressionOptions: { level: 6 },
+      });
+
+      await fs.writeFile(resolvedOutputPath, content);
+
+      const checksum = createHash("sha256").update(content).digest("hex");
+      const stats = await fs.stat(resolvedOutputPath);
+
+      return {
+        ok: true,
+        data: {
+          path: resolvedOutputPath,
+          size: stats.size,
+          checksum,
+          generatedAt: new Date().toISOString(),
+        },
+      };
+    } catch (error) {
+      return { ok: false, error };
+    }
+  }
+
+  async buildZipFromManifest(
+    workingDir: string,
+    outputPath: string,
+    manifestPath: string,
+    metadata?: ManifestBuildMetadata
+  ): Promise<OperationResult<ZipArtifact>> {
+    try {
+      const resolvedWorkingDir = path.resolve(workingDir);
+      const resolvedOutputPath = path.resolve(outputPath);
+      const resolvedManifestPath = path.resolve(manifestPath);
+
+      const manifestResult = await manifestService.parseManifest(resolvedManifestPath);
+      if (!manifestResult.ok || !manifestResult.data) {
+        return { ok: false, error: manifestResult.error ?? new Error("Unable to parse experiment manifest.") };
+      }
+
+      const manifestEntries = manifestResult.data;
+      const manifestXmlResult = manifestService.createManifestXml(manifestEntries, metadata);
+      if (!manifestXmlResult.ok || !manifestXmlResult.data) {
+        return { ok: false, error: manifestXmlResult.error ?? new Error("Unable to create experiment manifest XML.") };
+      }
+
+      const zip = new JSZip();
+      zip.file("manifest.xml", manifestXmlResult.data);
+
+      for (const entry of manifestEntries) {
+        const normalizedLocation = entry.location.replace(/\\/g, "/").replace(/^\.\//, "");
+        if (!normalizedLocation || normalizedLocation === "." || normalizedLocation === "manifest.xml") {
+          continue;
+        }
+
+        const absolutePath = path.join(resolvedWorkingDir, normalizedLocation);
+        const stats = await fs.stat(absolutePath);
+        if (stats.isDirectory()) {
+          continue;
+        }
+
+        const content = await fs.readFile(absolutePath);
+        zip.file(normalizedLocation, content);
+      }
 
       await fs.mkdir(path.dirname(resolvedOutputPath), { recursive: true });
 

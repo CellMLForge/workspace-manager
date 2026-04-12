@@ -7,6 +7,7 @@ import type {
   GitHubSession,
   ManifestEntry,
   PushContext,
+  SimulationExperimentManifest,
   WorkingTreeFile,
 } from "@domain/models";
 import { WorkspaceState } from "@domain/models";
@@ -28,9 +29,14 @@ const info = ref<string | null>(null);
 const workspaceName = ref("My Workspace");
 const workspaceDescription = ref("");
 const workingPath = ref("");
-const zipArchiveName = ref("omex-workspace.zip");
-const openCorLaunchUrl = ref<string | null>(null);
 const files = ref<WorkingTreeFile[]>([]);
+const simulationExperimentManifests = ref<SimulationExperimentManifest[]>([]);
+const simulationExperimentOutputs = ref<Record<string, { zipPath?: string; openCorUrl?: string }>>({});
+const showSimulationExperimentPrompt = ref(false);
+const simulationExperimentName = ref("");
+const simulationExperimentDescription = ref("");
+const simulationExperimentIncludedByPath = ref<Record<string, boolean>>({});
+const simulationExperimentMasterPath = ref<string | null>(null);
 const changeSet = ref<GitChangeSet | null>(null);
 const commitSuggestion = ref<CommitSuggestion | null>(null);
 const commitSummary = ref("");
@@ -54,8 +60,6 @@ const githubVerificationUrl = ref("");
 const githubDeviceCodeCopied = ref(false);
 let resolveRepoBrowser: ((value: string | null) => void) | null = null;
 const manifestFormatsByPath = ref<Record<string, string>>({});
-const manifestExcludedByPath = ref<Record<string, boolean>>({});
-const manifestMasterPath = ref<string | null>(null);
 const manifestUseCustomTypeByPath = ref<Record<string, boolean>>({});
 const manifestCustomTypeByPath = ref<Record<string, string>>({});
 const activityLogEntries = ref<Array<{ id: number; kind: "info" | "error"; message: string; time: string }>>([]);
@@ -650,24 +654,6 @@ const fileNameFromPath = (value: string) => {
   return index >= 0 ? normalized.slice(index + 1) : normalized;
 };
 
-const normalizeZipArchiveName = (input: string, fallbackWorkspaceName: string) => {
-  const fallbackStem = fallbackWorkspaceName
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9._-]+/g, "-")
-    .replace(/^-+|-+$/g, "") || "omex-workspace";
-
-  const trimmed = input.trim();
-  const withoutExtension = trimmed.replace(/\.zip$/i, "");
-  const sanitizedStem = withoutExtension
-    .replace(/[\\/:*?"<>|]+/g, "-")
-    .replace(/\s+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-+|-+$/g, "");
-
-  return `${sanitizedStem || fallbackStem}.zip`;
-};
-
 const buildZipTargetPath = (artifactsDir: string, archiveName: string) => {
   const separator = artifactsDir.includes("\\") ? "\\" : "/";
   const normalizedDir = artifactsDir.replace(/[\\/]+$/, "");
@@ -677,11 +663,43 @@ const buildZipTargetPath = (artifactsDir: string, archiveName: string) => {
 const collectManifestEntries = (): ManifestEntry[] => {
   return files.value
     .filter((file) => !file.isDirectory)
-    .filter((file) => !isFileExcludedFromManifest(file))
     .map((file) => ({
       location: `./${file.path}`,
       format: manifestFormatForFile(file),
-      master: isMasterForFile(file.path),
+    }));
+};
+
+const simulationExperimentCandidateFiles = () => {
+  return files.value.filter((file) => {
+    if (file.isDirectory) {
+      return false;
+    }
+
+    const lowerPath = file.path.toLowerCase();
+    if (lowerPath === "manifest.xml") {
+      return false;
+    }
+
+    return !lowerPath.startsWith("simulation-experiment-manifests/");
+  });
+};
+
+const resetSimulationExperimentDraft = () => {
+  simulationExperimentName.value = "";
+  simulationExperimentDescription.value = "";
+  simulationExperimentIncludedByPath.value = Object.fromEntries(
+    simulationExperimentCandidateFiles().map((file) => [file.path, false])
+  );
+  simulationExperimentMasterPath.value = null;
+};
+
+const collectSimulationExperimentEntries = (): ManifestEntry[] => {
+  return simulationExperimentCandidateFiles()
+    .filter((file) => simulationExperimentIncludedByPath.value[file.path])
+    .map((file) => ({
+      location: `./${file.path}`,
+      format: manifestFormatForFile(file),
+      master: simulationExperimentMasterPath.value === file.path,
     }));
 };
 
@@ -701,21 +719,6 @@ const defaultManifestFormatForPath = (relativePath: string) => {
 
   return "http://purl.org/NET/mediatypes/application/octet-stream";
 };
-
-const isFileExcludedFromManifest = (file: WorkingTreeFile) => {
-  if (file.isDirectory) {
-    return true;
-  }
-
-  const lowerPath = file.path.toLowerCase();
-  if (lowerPath === "manifest.xml") {
-    return false;
-  }
-
-  return manifestExcludedByPath.value[file.path] ?? false;
-};
-
-const isMasterForFile = (filePath: string) => manifestMasterPath.value === filePath;
 
 const manifestFormatForFile = (file: WorkingTreeFile) => {
   if (file.path.toLowerCase() === "manifest.xml") {
@@ -739,10 +742,8 @@ const selectorValueForFile = (file: WorkingTreeFile) => {
 
 const syncManifestEditorState = (workingTreeFiles: WorkingTreeFile[]) => {
   const nextFormats: Record<string, string> = {};
-  const nextExcluded: Record<string, boolean> = {};
   const nextUseCustom: Record<string, boolean> = {};
   const nextCustom: Record<string, string> = {};
-  let masterStillExists = false;
 
   for (const file of workingTreeFiles) {
     if (file.isDirectory) {
@@ -751,7 +752,6 @@ const syncManifestEditorState = (workingTreeFiles: WorkingTreeFile[]) => {
 
     const existingFormat = manifestFormatsByPath.value[file.path] ?? defaultManifestFormatForPath(file.path);
     nextFormats[file.path] = existingFormat;
-    nextExcluded[file.path] = manifestExcludedByPath.value[file.path] ?? false;
 
     const existingCustom = manifestCustomTypeByPath.value[file.path] ?? "";
     const hasKnownFormat = KNOWN_MANIFEST_FORMAT_VALUES.has(existingFormat);
@@ -759,27 +759,11 @@ const syncManifestEditorState = (workingTreeFiles: WorkingTreeFile[]) => {
 
     nextUseCustom[file.path] = shouldUseCustom;
     nextCustom[file.path] = existingCustom || (shouldUseCustom ? existingFormat : "");
-
-    if (manifestMasterPath.value === file.path) {
-      masterStillExists = true;
-    }
   }
 
   manifestFormatsByPath.value = nextFormats;
-  manifestExcludedByPath.value = nextExcluded;
   manifestUseCustomTypeByPath.value = nextUseCustom;
   manifestCustomTypeByPath.value = nextCustom;
-
-  if (!masterStillExists) {
-    const firstSedml = workingTreeFiles.find(
-      (file) =>
-        !file.isDirectory &&
-        extensionFromPath(file.path) === ".sedml" &&
-        !(nextExcluded[file.path] ?? false)
-    );
-
-    manifestMasterPath.value = firstSedml?.path ?? null;
-  }
 };
 
 const applyManifestSelections = async () => {
@@ -828,21 +812,6 @@ const onManifestCustomTypeCommitted = async (filePath: string) => {
   await applyManifestSelections();
 };
 
-const onManifestExcludeChanged = async (filePath: string, excluded: boolean) => {
-  manifestExcludedByPath.value[filePath] = excluded;
-
-  if (excluded && manifestMasterPath.value === filePath) {
-    manifestMasterPath.value = null;
-  }
-
-  await applyManifestSelections();
-};
-
-const onManifestMasterChanged = async (filePath: string) => {
-  manifestMasterPath.value = filePath;
-  await applyManifestSelections();
-};
-
 const refreshFiles = async () => {
   if (!currentWorkspace.value || !window.api?.workspace?.listFiles) {
     return;
@@ -856,6 +825,214 @@ const refreshFiles = async () => {
   }
 
   error.value = String(result.error ?? "Unable to list workspace files");
+};
+
+const refreshSimulationExperimentManifests = async () => {
+  if (!currentWorkspace.value || !window.api?.workspace?.listSimulationExperimentManifests) {
+    return;
+  }
+
+  const result = await window.api.workspace.listSimulationExperimentManifests(toRaw(currentWorkspace.value)!);
+  if (!result.ok) {
+    error.value = String(result.error ?? "Unable to list simulation experiment manifests");
+    return;
+  }
+
+  simulationExperimentManifests.value = result.data ?? [];
+};
+
+const handleOpenSimulationExperimentPrompt = () => {
+  if (!currentWorkspace.value) {
+    error.value = "Load a workspace before creating a simulation experiment.";
+    return;
+  }
+
+  resetSimulationExperimentDraft();
+  showSimulationExperimentPrompt.value = true;
+};
+
+const handleToggleSimulationExperimentFile = (filePath: string, included: boolean) => {
+  simulationExperimentIncludedByPath.value[filePath] = included;
+  if (!included && simulationExperimentMasterPath.value === filePath) {
+    simulationExperimentMasterPath.value = null;
+  }
+};
+
+const handleSetSimulationExperimentMaster = (filePath: string) => {
+  if (!simulationExperimentIncludedByPath.value[filePath]) {
+    simulationExperimentIncludedByPath.value[filePath] = true;
+  }
+
+  simulationExperimentMasterPath.value = filePath;
+};
+
+const handleCreateSimulationExperiment = async () => {
+  if (!currentWorkspace.value || !window.api?.workspace?.createSimulationExperimentManifest) {
+    error.value = "Simulation experiment APIs are not available";
+    return;
+  }
+
+  const trimmedName = simulationExperimentName.value.trim();
+  if (!trimmedName) {
+    error.value = "Please provide a simulation experiment name.";
+    return;
+  }
+
+  const entries = collectSimulationExperimentEntries();
+  if (entries.length === 0) {
+    error.value = "Select at least one workspace file for this simulation experiment.";
+    return;
+  }
+
+  loading.value = true;
+  error.value = null;
+
+  try {
+    const result = await window.api.workspace.createSimulationExperimentManifest(toRaw(currentWorkspace.value)!, {
+      name: trimmedName,
+      description: simulationExperimentDescription.value.trim() || undefined,
+      entries: entries.map((entry) => ({
+        location: entry.location,
+        format: entry.format,
+        master: entry.master,
+        description: entry.description,
+      })),
+    });
+
+    if (!result.ok) {
+      error.value = String(result.error ?? "Unable to create simulation experiment manifest");
+      return;
+    }
+
+    showSimulationExperimentPrompt.value = false;
+    resetSimulationExperimentDraft();
+    await refreshSimulationExperimentManifests();
+    info.value = `Created simulation experiment manifest: ${trimmedName}`;
+  } finally {
+    loading.value = false;
+  }
+};
+
+const handleLaunchOpenCorUrl = async (targetUrl: string) => {
+  if (!targetUrl) {
+    return;
+  }
+
+  try {
+    if (window.api?.ui?.openExternal) {
+      await window.api.ui.openExternal(targetUrl);
+      return;
+    }
+
+    window.open(targetUrl, "_blank", "noopener,noreferrer");
+  } catch (caughtError) {
+    error.value = caughtError instanceof Error ? caughtError.message : "Unable to open OpenCOR URL";
+  }
+};
+
+const handleCopyOpenCorUrl = async (targetUrl: string) => {
+  if (!targetUrl) {
+    return;
+  }
+
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(targetUrl);
+    } else {
+      const fallbackInput = document.createElement("textarea");
+      fallbackInput.value = targetUrl;
+      fallbackInput.setAttribute("readonly", "readonly");
+      fallbackInput.style.position = "absolute";
+      fallbackInput.style.left = "-9999px";
+      document.body.appendChild(fallbackInput);
+      fallbackInput.select();
+      document.execCommand("copy");
+      document.body.removeChild(fallbackInput);
+    }
+
+    info.value = "OpenCOR launch URL copied to clipboard.";
+  } catch (caughtError) {
+    error.value = caughtError instanceof Error ? caughtError.message : "Unable to copy OpenCOR URL";
+  }
+};
+
+const handleBuildSimulationExperiment = async (experiment: SimulationExperimentManifest) => {
+  if (!currentWorkspace.value || !window.api?.zip?.buildFromManifest) {
+    error.value = "Simulation experiment ZIP build API not available";
+    return;
+  }
+
+  exporting.value = true;
+  error.value = null;
+
+  try {
+    const snapshotResult = window.api?.git?.getWorkspaceSnapshot
+      ? await window.api.git.getWorkspaceSnapshot(toRaw(currentWorkspace.value)!)
+      : await window.api.git.detectChanges(toRaw(currentWorkspace.value)!);
+
+    if (!snapshotResult?.ok || !snapshotResult.data) {
+      error.value = String(snapshotResult?.error ?? "Unable to inspect git workspace state before ZIP build");
+      return;
+    }
+
+    const hasUncommittedChanges = "hasUncommittedChanges" in snapshotResult.data
+      ? Boolean(snapshotResult.data.hasUncommittedChanges)
+      : (snapshotResult.data.added.length + snapshotResult.data.modified.length + snapshotResult.data.deleted.length) > 0;
+
+    if (hasUncommittedChanges) {
+      const pendingSummary = changeSet.value
+        ? summarizeChanges(changeSet.value)
+        : "Uncommitted changes are present in the workspace.";
+      const shouldProceed = window.api?.ui?.confirmBuildWithUncommittedChanges
+        ? await window.api.ui.confirmBuildWithUncommittedChanges(pendingSummary)
+        : window.confirm(`Uncommitted changes detected (${pendingSummary}). Build ZIP anyway?`);
+
+      if (!shouldProceed) {
+        info.value = "ZIP build cancelled so you can commit changes first.";
+        return;
+      }
+    }
+
+    const metadata = {
+      generatedAt: new Date().toISOString(),
+      hasUncommittedChanges,
+      gitBranch: "gitBranch" in snapshotResult.data ? snapshotResult.data.gitBranch : undefined,
+      gitRevision: "gitRevision" in snapshotResult.data ? snapshotResult.data.gitRevision : undefined,
+      gitRepoUrl:
+        currentWorkspace.value.gitRepoUrl ||
+        ("gitRepoUrl" in snapshotResult.data ? snapshotResult.data.gitRepoUrl : undefined),
+    };
+
+    const targetPath = buildZipTargetPath(currentWorkspace.value.artifactsDir, experiment.archiveFileName);
+    const result = await window.api.zip.buildFromManifest(
+      currentWorkspace.value.workingDir,
+      targetPath,
+      experiment.manifestPath,
+      metadata
+    );
+
+    if (!result.ok || !result.data) {
+      error.value = String(result.error ?? "Failed to build simulation experiment ZIP");
+      return;
+    }
+
+    const base64Result = await window.api.zip.getBase64String(result.data.path);
+    const openCorUrl = base64Result.ok && base64Result.data
+      ? `${OPENCOR_DATA_URI_PREFIX}${base64Result.data}`
+      : undefined;
+
+    simulationExperimentOutputs.value = {
+      ...simulationExperimentOutputs.value,
+      [experiment.manifestPath]: {
+        zipPath: result.data.path,
+        openCorUrl,
+      },
+    };
+
+    info.value = `ZIP exported to ${result.data.path}`;
+  } finally {
+    exporting.value = false;
+  }
 };
 
 const refreshGitInsights = async () => {
@@ -992,10 +1169,10 @@ const bootstrapWorkspaceContext = async (workspace: WorkspaceProject) => {
   workingPath.value = workspace.workingDir;
   workspaceName.value = workspace.name;
   workspaceDescription.value = workspace.description || "";
-  zipArchiveName.value = normalizeZipArchiveName(fileNameFromPath(workspace.zipPath), workspace.name);
-  openCorLaunchUrl.value = null;
+  simulationExperimentOutputs.value = {};
   info.value = `Workspace loaded at ${workspace.workingDir}`;
   await refreshFiles();
+  await refreshSimulationExperimentManifests();
   await refreshGitInsights();
 };
 
@@ -1244,173 +1421,6 @@ const pickImportDirectory = async () => {
   await importFiles([sourcePath]);
 };
 
-const handleExportZip = async () => {
-  if (!currentWorkspace.value) {
-    error.value = "Load or create a workspace before exporting.";
-    return;
-  }
-
-  if (!window.api?.zip?.build) {
-    error.value = "ZIP export API not available";
-    return;
-  }
-
-  const normalizedArchiveName = normalizeZipArchiveName(zipArchiveName.value, currentWorkspace.value.name);
-  zipArchiveName.value = normalizedArchiveName;
-
-  const targetPath = buildZipTargetPath(currentWorkspace.value.artifactsDir, normalizedArchiveName);
-  if (!targetPath.trim()) {
-    error.value = "Invalid ZIP archive name.";
-    return;
-  }
-
-  currentWorkspace.value = {
-    ...currentWorkspace.value,
-    zipPath: targetPath,
-  };
-
-  exporting.value = true;
-  error.value = null;
-  info.value = null;
-  openCorLaunchUrl.value = null;
-
-  try {
-    const snapshotResult = window.api?.git?.getWorkspaceSnapshot
-      ? await window.api.git.getWorkspaceSnapshot(toRaw(currentWorkspace.value)!)
-      : await window.api.git.detectChanges(toRaw(currentWorkspace.value)!);
-
-    if (!snapshotResult?.ok || !snapshotResult.data) {
-      error.value = String(snapshotResult?.error ?? "Unable to inspect git workspace state before ZIP build");
-      return;
-    }
-
-    const hasUncommittedChanges = "hasUncommittedChanges" in snapshotResult.data
-      ? Boolean(snapshotResult.data.hasUncommittedChanges)
-      : (snapshotResult.data.added.length + snapshotResult.data.modified.length + snapshotResult.data.deleted.length) > 0;
-
-    if (hasUncommittedChanges) {
-      let shouldProceed = false;
-      const pendingSummary = changeSet.value
-        ? summarizeChanges(changeSet.value)
-        : "Uncommitted changes are present in the workspace.";
-
-      if (window.api?.ui?.confirmBuildWithUncommittedChanges) {
-        shouldProceed = await window.api.ui.confirmBuildWithUncommittedChanges(pendingSummary);
-      } else {
-        shouldProceed = window.confirm(
-          `Uncommitted changes detected (${pendingSummary}). Build ZIP anyway?`
-        );
-      }
-
-      if (!shouldProceed) {
-        info.value = "ZIP build cancelled so you can commit changes first.";
-        return;
-      }
-    }
-
-    const metadata = {
-      generatedAt: new Date().toISOString(),
-      hasUncommittedChanges,
-      gitBranch: "gitBranch" in snapshotResult.data ? snapshotResult.data.gitBranch : undefined,
-      gitRevision: "gitRevision" in snapshotResult.data ? snapshotResult.data.gitRevision : undefined,
-      gitRepoUrl:
-        currentWorkspace.value.gitRepoUrl ||
-        ("gitRepoUrl" in snapshotResult.data ? snapshotResult.data.gitRepoUrl : undefined),
-    };
-
-    const manifestEntries = collectManifestEntries();
-    const manifestResult = await window.api.manifest.generate(
-      currentWorkspace.value.manifestPath,
-      manifestEntries,
-      metadata
-    );
-    if (!manifestResult.ok) {
-      error.value = String(manifestResult.error ?? "Failed to update manifest.xml before ZIP build");
-      return;
-    }
-
-    const excludedWorkspacePaths = files.value
-      .filter((file) => !file.isDirectory)
-      .filter((file) => isFileExcludedFromManifest(file))
-      .map((file) => file.path);
-
-    const result = await window.api.zip.build(currentWorkspace.value.workingDir, targetPath, [
-      ".git",
-      "node_modules",
-      "dist",
-      ...excludedWorkspacePaths,
-    ]);
-
-    if (!result.ok) {
-      error.value = String(result.error ?? "Failed to build workspace ZIP");
-      return;
-    }
-
-    const builtZipPath = result.data?.path ?? targetPath;
-    info.value = `ZIP exported to ${builtZipPath}`;
-
-    if (!window.api?.zip?.getBase64String) {
-      return;
-    }
-
-    const base64Result = await window.api.zip.getBase64String(builtZipPath);
-    if (!base64Result.ok || !base64Result.data) {
-      error.value = String(base64Result.error ?? "ZIP was built, but Base64 generation failed");
-      return;
-    }
-
-    openCorLaunchUrl.value = `${OPENCOR_DATA_URI_PREFIX}${base64Result.data}`;
-    info.value = `ZIP exported to ${builtZipPath}. OpenCOR launch link generated.`;
-  } catch (caughtError) {
-    error.value = caughtError instanceof Error ? caughtError.message : "Unexpected export error";
-  } finally {
-    exporting.value = false;
-  }
-};
-
-const handleLaunchOpenCor = async () => {
-  if (!openCorLaunchUrl.value) {
-    return;
-  }
-
-  try {
-    if (window.api?.ui?.openExternal) {
-      await window.api.ui.openExternal(openCorLaunchUrl.value);
-      return;
-    }
-
-    window.open(openCorLaunchUrl.value, "_blank", "noopener,noreferrer");
-  } catch (caughtError) {
-    error.value = caughtError instanceof Error ? caughtError.message : "Unable to open OpenCOR URL";
-  }
-};
-
-const handleCopyOpenCorUrl = async () => {
-  if (!openCorLaunchUrl.value) {
-    return;
-  }
-
-  try {
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(openCorLaunchUrl.value);
-    } else {
-      const textArea = document.createElement("textarea");
-      textArea.value = openCorLaunchUrl.value;
-      textArea.setAttribute("readonly", "true");
-      textArea.style.position = "absolute";
-      textArea.style.left = "-9999px";
-      document.body.appendChild(textArea);
-      textArea.select();
-      document.execCommand("copy");
-      document.body.removeChild(textArea);
-    }
-
-    info.value = "OpenCOR URL copied to clipboard.";
-  } catch (caughtError) {
-    error.value = caughtError instanceof Error ? caughtError.message : "Unable to copy OpenCOR URL";
-  }
-};
-
 const handleOpenWorkspaceRepositoryUrl = async (repoUrl: string) => {
   if (!repoUrl) {
     return;
@@ -1476,16 +1486,16 @@ const resetWorkspaceSessionState = () => {
   workspaceName.value = "My Workspace";
   workspaceDescription.value = "";
   workingPath.value = "";
-  zipArchiveName.value = "omex-workspace.zip";
-  openCorLaunchUrl.value = null;
   files.value = [];
+  simulationExperimentManifests.value = [];
+  simulationExperimentOutputs.value = {};
+  showSimulationExperimentPrompt.value = false;
+  resetSimulationExperimentDraft();
   changeSet.value = null;
   commitSuggestion.value = null;
   commitSummary.value = "";
   commitDescription.value = "";
   manifestFormatsByPath.value = {};
-  manifestExcludedByPath.value = {};
-  manifestMasterPath.value = null;
   manifestUseCustomTypeByPath.value = {};
   manifestCustomTypeByPath.value = {};
 };
@@ -2115,6 +2125,94 @@ watch(workspaceDescription, () => {
         </div>
       </div>
 
+      <div v-if="showSimulationExperimentPrompt" class="modal-backdrop" @click="showSimulationExperimentPrompt = false">
+        <div class="modal-panel modal-panel--wide" @click.stop>
+          <h3 class="modal-title">Create simulation experiment</h3>
+          <div class="field-grid compact browser-field-grid">
+            <label class="field-label" for="simulationExperimentName">Archive name</label>
+            <input
+              id="simulationExperimentName"
+              v-model="simulationExperimentName"
+              class="field-input"
+              type="text"
+              placeholder="simulation-experiment"
+            />
+
+            <label class="field-label" for="simulationExperimentDescription">Description</label>
+            <textarea
+              id="simulationExperimentDescription"
+              v-model="simulationExperimentDescription"
+              class="field-input field-textarea"
+              rows="3"
+              placeholder="Describe the purpose of this simulation experiment"
+            />
+          </div>
+
+          <ul class="file-list simulation-experiment-file-list">
+            <li class="file-row file-row--header simulation-experiment-file-row" aria-hidden="true">
+              <span>Include</span>
+              <span class="file-path">Path</span>
+              <span>Master</span>
+              <span>Type</span>
+            </li>
+            <li
+              v-for="file in simulationExperimentCandidateFiles()"
+              :key="`experiment-${file.path}`"
+              class="file-row simulation-experiment-file-row"
+            >
+              <label class="manifest-toggle" title="Include file in this simulation experiment archive">
+                <input
+                  type="checkbox"
+                  :checked="simulationExperimentIncludedByPath[file.path] ?? false"
+                  @change="handleToggleSimulationExperimentFile(file.path, ($event.target as HTMLInputElement).checked)"
+                />
+              </label>
+              <span class="file-path" :title="file.path">{{ file.path }}</span>
+              <label class="manifest-toggle" title="Mark as master file for this simulation experiment">
+                <input
+                  type="radio"
+                  name="simulation-experiment-master-file"
+                  :disabled="!(simulationExperimentIncludedByPath[file.path] ?? false)"
+                  :checked="simulationExperimentMasterPath === file.path"
+                  @change="handleSetSimulationExperimentMaster(file.path)"
+                />
+              </label>
+              <div class="manifest-type-editor">
+                <select
+                  class="manifest-type-select"
+                  :value="selectorValueForFile(file)"
+                  @change="onManifestFormatChanged(file.path, (($event.target as HTMLSelectElement).value))"
+                >
+                  <option
+                    v-for="entry in MANIFEST_FORMAT_CATALOG"
+                    :key="entry.value"
+                    :value="entry.value"
+                  >
+                    {{ entry.label }}
+                  </option>
+                  <option :value="CUSTOM_TYPE_SENTINEL">Custom...</option>
+                </select>
+                <input
+                  v-if="manifestUseCustomTypeByPath[file.path]"
+                  class="manifest-custom-type-input"
+                  type="text"
+                  :value="manifestCustomTypeByPath[file.path]"
+                  placeholder="Enter custom format URI"
+                  @input="onManifestCustomTypeChanged(file.path, ($event.target as HTMLInputElement).value)"
+                  @blur="onManifestCustomTypeCommitted(file.path)"
+                  @keydown.enter.prevent="onManifestCustomTypeCommitted(file.path)"
+                />
+              </div>
+            </li>
+          </ul>
+
+          <div class="hero-actions">
+            <PButton label="Cancel" severity="secondary" @click="showSimulationExperimentPrompt = false" />
+            <PButton label="Create" :loading="loading" @click="handleCreateSimulationExperiment" />
+          </div>
+        </div>
+      </div>
+
       <aside class="workspace-browser-panel">
         <PCard>
           <template #title>Workspace library</template>
@@ -2318,20 +2416,17 @@ watch(workspaceDescription, () => {
               No files loaded yet.
             </div>
             <ul v-else class="file-list">
-              <li class="file-row file-row--header" aria-hidden="true">
+              <li class="file-row file-row--header workspace-file-row" aria-hidden="true">
                 <span class="file-path">Path</span>
                 <span class="file-meta">Size</span>
                 <span>Type</span>
-                <span>Exclude</span>
-                <span>Master</span>
               </li>
-              <li v-for="file in files" :key="file.path" class="file-row">
+              <li v-for="file in files" :key="file.path" class="file-row workspace-file-row">
                 <span class="file-path" :title="file.path">{{ file.path }}</span>
                 <span class="file-meta">{{ file.isDirectory ? 'Directory' : `${file.size} bytes` }}</span>
                 <div v-if="!file.isDirectory" class="manifest-type-editor">
                   <select
                     class="manifest-type-select"
-                    :disabled="isFileExcludedFromManifest(file)"
                     :value="selectorValueForFile(file)"
                     @change="onManifestFormatChanged(file.path, (($event.target as HTMLSelectElement).value))"
                   >
@@ -2348,7 +2443,6 @@ watch(workspaceDescription, () => {
                     v-if="manifestUseCustomTypeByPath[file.path]"
                     class="manifest-custom-type-input"
                     type="text"
-                    :disabled="isFileExcludedFromManifest(file)"
                     :value="manifestCustomTypeByPath[file.path]"
                     placeholder="Enter custom format URI"
                     @input="onManifestCustomTypeChanged(file.path, ($event.target as HTMLInputElement).value)"
@@ -2357,23 +2451,6 @@ watch(workspaceDescription, () => {
                   />
                 </div>
                 <span v-else class="manifest-type-placeholder">(not in manifest)</span>
-                <label class="manifest-toggle" title="Exclude file from manifest.xml">
-                  <input
-                    type="checkbox"
-                    :disabled="file.isDirectory || file.path.toLowerCase() === 'manifest.xml'"
-                    :checked="isFileExcludedFromManifest(file)"
-                    @change="onManifestExcludeChanged(file.path, ($event.target as HTMLInputElement).checked)"
-                  />
-                </label>
-                <label class="manifest-toggle" title="Mark as master file">
-                  <input
-                    type="radio"
-                    name="manifest-master-file"
-                    :disabled="file.isDirectory || isFileExcludedFromManifest(file)"
-                    :checked="isMasterForFile(file.path)"
-                    @change="onManifestMasterChanged(file.path)"
-                  />
-                </label>
               </li>
             </ul>
           </template>
@@ -2382,55 +2459,63 @@ watch(workspaceDescription, () => {
 
       <section class="artifacts-panel">
         <PCard>
-          <template #title>Artifacts</template>
+          <template #title>Simulation Experiments</template>
           <template #content>
-            <div class="field-grid compact">
-              <label class="field-label" for="zipArchiveName">Archive file name</label>
-              <div class="input-row">
-                <input
-                  id="zipArchiveName"
-                  v-model="zipArchiveName"
-                  class="field-input"
-                  type="text"
-                  placeholder="my-workspace.zip"
-                />
-                <PButton
-                  label="Build ZIP"
-                  icon="pi pi-file-export"
-                  :disabled="!currentWorkspace || exporting"
-                  :loading="exporting"
-                  @click.stop="handleExportZip"
-                />
-              </div>
+            <div class="simulation-experiment-toolbar">
+              <p class="menu-hint">Create named experiment manifests and build ZIP archives from only the files they reference.</p>
+              <PButton
+                label="Create"
+                icon="pi pi-plus"
+                :disabled="!currentWorkspace"
+                @click="handleOpenSimulationExperimentPrompt"
+              />
             </div>
 
-            <div class="field-grid compact">
-              <label class="field-label" for="openCorUrl">OpenCOR URL</label>
-              <div class="input-row">
-                <input
-                  id="openCorUrl"
-                  :value="trimDisplayUrl(openCorLaunchUrl)"
-                  class="field-input field-input--readonly"
-                  type="text"
-                  readonly
-                  placeholder="Build ZIP to generate OpenCOR launch URL"
-                />
-                <PButton
-                  label="Launch"
-                  icon="pi pi-external-link"
-                  severity="secondary"
-                  :disabled="!openCorLaunchUrl"
-                  @click="handleLaunchOpenCor"
-                />
-                <PButton
-                  label="Copy"
-                  icon="pi pi-copy"
-                  severity="secondary"
-                  :disabled="!openCorLaunchUrl"
-                  @click="handleCopyOpenCorUrl"
-                />
-              </div>
+            <div v-if="simulationExperimentManifests.length === 0" class="empty-state">
+              No simulation experiment manifests yet. Create one to define a specific archive build.
             </div>
+
+            <ul v-else class="simulation-experiment-list">
+              <li v-for="experiment in simulationExperimentManifests" :key="experiment.manifestPath" class="simulation-experiment-item">
+                <div class="simulation-experiment-main">
+                  <div class="simulation-experiment-title-row">
+                    <strong>{{ experiment.name }}</strong>
+                    <span class="simulation-experiment-count">{{ experiment.entryCount }} file{{ experiment.entryCount === 1 ? '' : 's' }}</span>
+                  </div>
+                  <p v-if="experiment.description" class="simulation-experiment-description">{{ experiment.description }}</p>
+                  <p class="simulation-experiment-meta">
+                    Manifest: {{ experiment.manifestFileName }}
+                    <span v-if="experiment.masterLocation"> | Master: {{ experiment.masterLocation }}</span>
+                  </p>
+                </div>
+                <div class="simulation-experiment-actions">
+                  <PButton
+                    label="Build ZIP"
+                    icon="pi pi-file-export"
+                    size="small"
+                    :loading="exporting"
+                    :disabled="!currentWorkspace || exporting"
+                    @click="handleBuildSimulationExperiment(experiment)"
+                  />
+                  <PButton
+                    label="Launch OpenCOR"
+                    icon="pi pi-external-link"
+                    severity="secondary"
+                    size="small"
+                    :disabled="!simulationExperimentOutputs[experiment.manifestPath]?.openCorUrl"
+                    @click="handleLaunchOpenCorUrl(simulationExperimentOutputs[experiment.manifestPath]?.openCorUrl || '')"
+                  />
+                  <PButton
+                    label="Copy URL"
+                    icon="pi pi-copy"
+                    severity="secondary"
+                    size="small"
+                    :disabled="!simulationExperimentOutputs[experiment.manifestPath]?.openCorUrl"
+                    @click="handleCopyOpenCorUrl(simulationExperimentOutputs[experiment.manifestPath]?.openCorUrl || '')"
+                  />
+                </div>
+              </li>
+            </ul>
           </template>
         </PCard>
       </section>
@@ -3053,11 +3138,18 @@ h1 {
 
 .file-row {
   display: grid;
-  grid-template-columns: minmax(0, 1.6fr) auto minmax(320px, 1fr) auto auto;
   gap: 0.75rem;
   align-items: center;
   border-bottom: 1px solid rgba(24, 33, 47, 0.12);
   padding: 0.4rem 0;
+}
+
+.workspace-file-row {
+  grid-template-columns: minmax(0, 1.6fr) auto minmax(320px, 1fr);
+}
+
+.simulation-experiment-file-row {
+  grid-template-columns: auto minmax(0, 1.5fr) auto minmax(280px, 1fr);
 }
 
 .file-row--header {
@@ -3109,6 +3201,77 @@ h1 {
   white-space: nowrap;
   color: #4d5f75;
   justify-content: center;
+}
+
+.simulation-experiment-toolbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.simulation-experiment-toolbar .menu-hint {
+  margin: 0;
+}
+
+.simulation-experiment-file-list {
+  max-height: min(42vh, 420px);
+  overflow: auto;
+}
+
+.simulation-experiment-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.75rem;
+}
+
+.simulation-experiment-item {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.85rem 0.9rem;
+  border: 1px solid rgba(24, 33, 47, 0.12);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.76);
+}
+
+.simulation-experiment-main {
+  min-width: 0;
+  display: grid;
+  gap: 0.3rem;
+}
+
+.simulation-experiment-title-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.simulation-experiment-count,
+.simulation-experiment-meta {
+  color: #5a6d84;
+  font-size: 0.86rem;
+}
+
+.simulation-experiment-description {
+  margin: 0;
+  color: #314359;
+}
+
+.simulation-experiment-meta {
+  margin: 0;
+}
+
+.simulation-experiment-actions {
+  display: inline-flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .commit-description {

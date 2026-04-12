@@ -21,6 +21,10 @@ contextBridge.exposeInMainWorld("api", {
       ipcRenderer.invoke("workspace:clearLibrarySettings"),
     listLibraryWorkspaces: () =>
       ipcRenderer.invoke("workspace:listLibraryWorkspaces"),
+    listSimulationExperimentManifests: (workspace: any) =>
+      ipcRenderer.invoke("workspace:listSimulationExperimentManifests", workspace),
+    createSimulationExperimentManifest: (workspace: any, options: any) =>
+      ipcRenderer.invoke("workspace:createSimulationExperimentManifest", workspace, options),
     importToLibrary: (sourceWorkspaceDir: string) =>
       ipcRenderer.invoke("workspace:importToLibrary", sourceWorkspaceDir),
     rememberLastOpened: (workingDir: string | null) =>
@@ -103,6 +107,8 @@ contextBridge.exposeInMainWorld("api", {
   zip: {
     build: (workingDir: string, outputPath: string, excludePaths?: string[]) =>
       ipcRenderer.invoke("zip:build", workingDir, outputPath, excludePaths),
+    buildFromManifest: (workingDir: string, outputPath: string, manifestPath: string, metadata?: any) =>
+      ipcRenderer.invoke("zip:buildFromManifest", workingDir, outputPath, manifestPath, metadata),
     extract: (zipPath: string, outputDir: string) =>
       ipcRenderer.invoke("zip:extract", zipPath, outputDir),
     generateBase64: (zipPath: string, outputPath: string) =>

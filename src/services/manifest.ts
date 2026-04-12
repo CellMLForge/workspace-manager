@@ -23,6 +23,104 @@ const normalizeManifestLocation = (location: string) => {
   return `./${normalized}`;
 };
 
+const buildManifestXml = (
+  entries: ManifestEntry[],
+  metadata?: ManifestBuildMetadata
+) => {
+  const seenLocations = new Set<string>();
+  const normalizedEntries: ManifestEntry[] = [];
+
+  for (const entry of entries) {
+    const location = normalizeManifestLocation(entry.location);
+    const format = entry.format?.trim();
+
+    if (!format) {
+      throw new Error(`Manifest entry for '${location}' is missing format.`);
+    }
+
+    if (seenLocations.has(location)) {
+      throw new Error(`Duplicate manifest location '${location}'.`);
+    }
+
+    seenLocations.add(location);
+    normalizedEntries.push({
+      ...entry,
+      location,
+      format,
+    });
+  }
+
+  if (!seenLocations.has(".")) {
+    normalizedEntries.unshift({
+      location: ".",
+      format: "http://identifiers.org/combine.specifications/omex",
+    });
+    seenLocations.add(".");
+  }
+
+  if (!seenLocations.has("./manifest.xml")) {
+    normalizedEntries.push({
+      location: "./manifest.xml",
+      format: "http://identifiers.org/combine.specifications/omex-manifest",
+    });
+  }
+
+  const document = create({ version: "1.0", encoding: "UTF-8" })
+    .ele("omexManifest", { xmlns: MANIFEST_NS });
+
+  for (const entry of normalizedEntries) {
+    const attributes: Record<string, string> = {
+      location: entry.location,
+      format: entry.format,
+    };
+
+    if (entry.master) {
+      attributes.master = "true";
+    }
+
+    if (entry.description) {
+      attributes.description = entry.description;
+    }
+
+    document.ele("content", attributes).up();
+  }
+
+  if (metadata) {
+    const metadataNode = document.ele("metadata");
+    const rdfNode = metadataNode.ele("rdf:RDF", {
+      "xmlns:rdf": RDF_NS,
+      "xmlns:cellmlforge": CELLMLFORGE_NS,
+    });
+
+    const descriptionNode = rdfNode.ele("rdf:Description", {
+      "rdf:about": ".",
+    });
+
+    descriptionNode
+      .ele("cellmlforge:hasUncommittedChanges")
+      .txt(String(metadata.hasUncommittedChanges))
+      .up();
+
+    if (metadata.gitBranch) {
+      descriptionNode.ele("cellmlforge:gitBranch").txt(metadata.gitBranch).up();
+    }
+
+    if (metadata.gitRevision) {
+      descriptionNode.ele("cellmlforge:gitRevision").txt(metadata.gitRevision).up();
+    }
+
+    if (metadata.gitRepoUrl) {
+      descriptionNode.ele("cellmlforge:gitRepository").txt(metadata.gitRepoUrl).up();
+    }
+
+    descriptionNode.up();
+    rdfNode.up();
+    metadataNode.up();
+  }
+
+  return `${document.end({ prettyPrint: true })}\n`;
+};
+
 export class ManifestService {
   /**
    * Parse manifest.xml from archive working tree
@@ -32,14 +130,28 @@ export class ManifestService {
   ): Promise<OperationResult<ManifestEntry[]>> {
     try {
       const xml = await fs.readFile(manifestPath, "utf8");
-      const matches = Array.from(
-        xml.matchAll(/<content\b[^>]*\blocation="([^"]+)"[^>]*\bformat="([^"]+)"[^>]*\/?>(?:<\/content>)?/gi)
-      );
+      const contentTags = Array.from(xml.matchAll(/<content\b([^>]*)\/?>(?:<\/content>)?/gi));
 
-      const entries: ManifestEntry[] = matches.map((match) => ({
-        location: match[1],
-        format: match[2],
-      }));
+      const entries = contentTags
+        .map((match) => match[1] ?? "")
+        .map((attributeSource) => {
+          const attributes = Array.from(attributeSource.matchAll(/([a-zA-Z_:][a-zA-Z0-9_.:-]*)="([^"]*)"/g));
+          const attributeMap = Object.fromEntries(attributes.map((match) => [match[1], match[2]]));
+          const location = attributeMap.location;
+          const format = attributeMap.format;
+
+          if (!location || !format) {
+            return null;
+          }
+
+          return {
+            location,
+            format,
+            description: attributeMap.description?.trim() || undefined,
+            master: attributeMap.master === "true",
+          } as ManifestEntry;
+        })
+        .filter((entry): entry is ManifestEntry => entry !== null);
 
       return { ok: true, data: entries };
     } catch (error) {
@@ -56,101 +168,21 @@ export class ManifestService {
     metadata?: ManifestBuildMetadata
   ): Promise<OperationResult<void>> {
     try {
-      const seenLocations = new Set<string>();
-      const normalizedEntries: ManifestEntry[] = [];
-
-      for (const entry of entries) {
-        const location = normalizeManifestLocation(entry.location);
-        const format = entry.format?.trim();
-
-        if (!format) {
-          return { ok: false, error: new Error(`Manifest entry for '${location}' is missing format.`) };
-        }
-
-        if (seenLocations.has(location)) {
-          return { ok: false, error: new Error(`Duplicate manifest location '${location}'.`) };
-        }
-
-        seenLocations.add(location);
-        normalizedEntries.push({
-          ...entry,
-          location,
-          format,
-        });
-      }
-
-      if (!seenLocations.has(".")) {
-        normalizedEntries.unshift({
-          location: ".",
-          format: "http://identifiers.org/combine.specifications/omex",
-        });
-        seenLocations.add(".");
-      }
-
-      if (!seenLocations.has("./manifest.xml")) {
-        normalizedEntries.push({
-          location: "./manifest.xml",
-          format: "http://identifiers.org/combine.specifications/omex-manifest",
-        });
-      }
-
-      const document = create({ version: "1.0", encoding: "UTF-8" })
-        .ele("omexManifest", { xmlns: MANIFEST_NS });
-
-      for (const entry of normalizedEntries) {
-        const attributes: Record<string, string> = {
-          location: entry.location,
-          format: entry.format,
-        };
-
-        if (entry.master) {
-          attributes.master = "true";
-        }
-
-        if (entry.description) {
-          attributes.description = entry.description;
-        }
-
-        document.ele("content", attributes).up();
-      }
-
-      if (metadata) {
-        const metadataNode = document.ele("metadata");
-        const rdfNode = metadataNode.ele("rdf:RDF", {
-          "xmlns:rdf": RDF_NS,
-          "xmlns:cellmlforge": CELLMLFORGE_NS,
-        });
-
-        const descriptionNode = rdfNode.ele("rdf:Description", {
-          "rdf:about": ".",
-        });
-
-        descriptionNode
-          .ele("cellmlforge:hasUncommittedChanges")
-          .txt(String(metadata.hasUncommittedChanges))
-          .up();
-
-        if (metadata.gitBranch) {
-          descriptionNode.ele("cellmlforge:gitBranch").txt(metadata.gitBranch).up();
-        }
-
-        if (metadata.gitRevision) {
-          descriptionNode.ele("cellmlforge:gitRevision").txt(metadata.gitRevision).up();
-        }
-
-        if (metadata.gitRepoUrl) {
-          descriptionNode.ele("cellmlforge:gitRepository").txt(metadata.gitRepoUrl).up();
-        }
-
-        descriptionNode.up();
-        rdfNode.up();
-        metadataNode.up();
-      }
-
-      const xml = document.end({ prettyPrint: true });
-      await fs.writeFile(manifestPath, `${xml}\n`, "utf8");
+      const xml = buildManifestXml(entries, metadata);
+      await fs.writeFile(manifestPath, xml, "utf8");
 
       return { ok: true };
+    } catch (error) {
+      return { ok: false, error };
+    }
+  }
+
+  createManifestXml(
+    entries: ManifestEntry[],
+    metadata?: ManifestBuildMetadata
+  ): OperationResult<string> {
+    try {
+      return { ok: true, data: buildManifestXml(entries, metadata) };
     } catch (error) {
       return { ok: false, error };
     }

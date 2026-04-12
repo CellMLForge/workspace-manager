@@ -10,11 +10,13 @@ import Store from "electron-store";
 import {
   WorkspaceLibrarySettings,
   WorkspaceProject,
+  SimulationExperimentManifest,
   OperationResult,
   WorkingTreeFile,
 } from "../domain/models";
 import { WorkspaceState } from "../domain/models";
 import { gitService } from "./git";
+import { manifestService } from "./manifest";
 
 // Read app version from package.json for versioning config files
 const packageJson = require("../../package.json") as { version: string };
@@ -24,6 +26,7 @@ const MANIFEST_FILE_NAME = "manifest.xml";
 const ARTIFACTS_DIRECTORY_NAME = ".omex-artifacts";
 const WORKSPACE_CONFIG_FILE_NAME = "cellmlforge-workspace-manager.json";
 const WORKSPACE_CONFIG_SCHEMA_VERSION = "1.0";
+const SIMULATION_EXPERIMENT_MANIFESTS_DIRECTORY_NAME = "simulation-experiment-manifests";
 
 type WorkspaceStoreShape = WorkspaceLibrarySettings;
 
@@ -49,6 +52,17 @@ const buildWorkspaceSlug = (name: string) => {
     .replace(/^-+|-+$/g, "");
 
   return slug || "workspace";
+};
+
+const buildExperimentManifestFileName = (name: string) => {
+  const sanitized = name
+    .trim()
+    .replace(/[\\/:*?"<>|]+/g, "-")
+    .replace(/\s+/g, " ")
+    .replace(/-+/g, "-")
+    .trim();
+
+  return `${sanitized || "simulation-experiment"}.xml`;
 };
 
 const createManifestStub = (workspaceName: string) => `<?xml version="1.0" encoding="UTF-8"?>
@@ -152,6 +166,16 @@ export class WorkspaceService {
 
   private getWorkspaceMetadataPath(workingDir: string) {
     return path.join(workingDir, WORKSPACE_CONFIG_FILE_NAME);
+  }
+
+  private getSimulationExperimentManifestsDir(workingDir: string) {
+    return path.join(workingDir, SIMULATION_EXPERIMENT_MANIFESTS_DIRECTORY_NAME);
+  }
+
+  private async ensureSimulationExperimentManifestsDir(workingDir: string) {
+    const manifestsDir = this.getSimulationExperimentManifestsDir(workingDir);
+    await fs.mkdir(manifestsDir, { recursive: true });
+    return manifestsDir;
   }
 
   private readWorkspaceLibrarySettings(): WorkspaceLibrarySettings {
@@ -368,6 +392,118 @@ export class WorkspaceService {
     }
   }
 
+  async listSimulationExperimentManifests(
+    workspace: WorkspaceProject
+  ): Promise<OperationResult<SimulationExperimentManifest[]>> {
+    try {
+      const resolvedWorkingDir = path.resolve(workspace.workingDir);
+      const manifestsDir = await this.ensureSimulationExperimentManifestsDir(resolvedWorkingDir);
+      const directoryEntries = await fs.readdir(manifestsDir, { withFileTypes: true });
+      const manifests: SimulationExperimentManifest[] = [];
+
+      for (const entry of directoryEntries) {
+        if (!entry.isFile() || path.extname(entry.name).toLowerCase() !== ".xml") {
+          continue;
+        }
+
+        const manifestPath = path.join(manifestsDir, entry.name);
+        const parsed = await manifestService.parseManifest(manifestPath);
+        if (!parsed.ok || !parsed.data) {
+          continue;
+        }
+
+        const stats = await fs.stat(manifestPath);
+        const rootEntry = parsed.data.find((item) => item.location === ".");
+        const masterEntry = parsed.data.find((item) => item.master);
+        const baseName = path.basename(entry.name, path.extname(entry.name));
+
+        manifests.push({
+          name: baseName,
+          description: rootEntry?.description?.trim() || undefined,
+          manifestFileName: entry.name,
+          manifestPath,
+          archiveFileName: `${baseName}.zip`,
+          entryCount: parsed.data.filter((item) => item.location !== "." && item.location !== "./manifest.xml").length,
+          masterLocation: masterEntry?.location,
+          updatedAt: stats.mtime.toISOString(),
+        });
+      }
+
+      manifests.sort((left, right) => left.name.localeCompare(right.name));
+      return { ok: true, data: manifests };
+    } catch (error) {
+      return { ok: false, error };
+    }
+  }
+
+  async createSimulationExperimentManifest(
+    workspace: WorkspaceProject,
+    options: {
+      name: string;
+      description?: string;
+      entries: Array<{ location: string; format: string; master?: boolean; description?: string }>;
+    }
+  ): Promise<OperationResult<SimulationExperimentManifest>> {
+    try {
+      const resolvedWorkingDir = path.resolve(workspace.workingDir);
+      const manifestsDir = await this.ensureSimulationExperimentManifestsDir(resolvedWorkingDir);
+      const trimmedName = options.name.trim();
+      if (!trimmedName) {
+        throw new Error("Simulation experiment name is required.");
+      }
+
+      const manifestFileName = buildExperimentManifestFileName(trimmedName);
+      const manifestPath = path.join(manifestsDir, manifestFileName);
+
+      try {
+        await fs.access(manifestPath);
+        throw new Error(`A simulation experiment named '${trimmedName}' already exists.`);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+          throw error;
+        }
+      }
+
+      const manifestEntries = options.entries.map((entry) => ({
+        location: entry.location,
+        format: entry.format,
+        master: entry.master,
+        description: entry.description,
+      }));
+
+      const description = options.description?.trim() || undefined;
+      const generateResult = await manifestService.generateManifest(manifestPath, [
+        {
+          location: ".",
+          format: "http://identifiers.org/combine.specifications/omex",
+          description: description || trimmedName,
+        },
+        ...manifestEntries,
+      ]);
+
+      if (!generateResult.ok) {
+        throw toErrorMessage(generateResult.error);
+      }
+
+      const stats = await fs.stat(manifestPath);
+      return {
+        ok: true,
+        data: {
+          name: trimmedName,
+          description,
+          manifestFileName,
+          manifestPath,
+          archiveFileName: `${buildWorkspaceSlug(trimmedName)}.zip`,
+          entryCount: manifestEntries.length,
+          masterLocation: manifestEntries.find((entry) => entry.master)?.location,
+          updatedAt: stats.mtime.toISOString(),
+        },
+      };
+    } catch (error) {
+      return { ok: false, error };
+    }
+  }
+
   async createWorkspaceInLibrary(
     name: string,
     description?: string
@@ -475,6 +611,7 @@ export class WorkspaceService {
       const now = new Date().toISOString();
 
       await fs.mkdir(artifactsDir, { recursive: true });
+      await this.ensureSimulationExperimentManifestsDir(resolvedWorkingDir);
       await fs.writeFile(manifestPath, createManifestStub(trimmedName), "utf8");
       await this.writeWorkspaceMetadata(resolvedWorkingDir, {
         name: trimmedName,

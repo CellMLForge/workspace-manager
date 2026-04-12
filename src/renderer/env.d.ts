@@ -17,6 +17,15 @@ interface RendererApi {
     setLibraryPath: (libraryPath: string) => Promise<IpcResult<import("@domain/models").WorkspaceLibrarySettings>>;
     clearLibrarySettings: () => Promise<IpcResult<import("@domain/models").WorkspaceLibrarySettings>>;
     listLibraryWorkspaces: () => Promise<IpcResult<import("@domain/models").WorkspaceProject[]>>;
+    listSimulationExperimentManifests: (workspace: import("@domain/models").WorkspaceProject) => Promise<IpcResult<import("@domain/models").SimulationExperimentManifest[]>>;
+    createSimulationExperimentManifest: (
+      workspace: import("@domain/models").WorkspaceProject,
+      options: {
+        name: string;
+        description?: string;
+        entries: Array<{ location: string; format: string; master?: boolean; description?: string }>;
+      }
+    ) => Promise<IpcResult<import("@domain/models").SimulationExperimentManifest>>;
     importToLibrary: (sourceWorkspaceDir: string) => Promise<IpcResult<import("@domain/models").WorkspaceProject>>;
     rememberLastOpened: (workingDir: string | null) => Promise<IpcResult<void>>;
     updateMetadata: (workingDir: string, updates: { name?: string; description?: string }) => Promise<IpcResult<{ name: string; description?: string; createdAt: string }>>;
@@ -72,6 +81,12 @@ interface RendererApi {
       workingDir: string,
       outputPath: string,
       excludePaths?: string[]
+    ) => Promise<IpcResult<import("@domain/models").ZipArtifact>>;
+    buildFromManifest: (
+      workingDir: string,
+      outputPath: string,
+      manifestPath: string,
+      metadata?: import("@domain/models").ManifestBuildMetadata
     ) => Promise<IpcResult<import("@domain/models").ZipArtifact>>;
     generateBase64: (
       zipPath: string,
