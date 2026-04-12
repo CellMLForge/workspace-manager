@@ -369,23 +369,27 @@ const mergeWorkspaceLibraryWorkspaces = (nextWorkspaces: WorkspaceProject[]) => 
 };
 
 const workspaceStatusBadgesFor = (workspace: WorkspaceProject) => {
-  const badges: Array<{ label: string; kind: "current" | "dirty" | "clean" | "github" }> = [];
+  const badges: Array<{
+    label: string;
+    kind: "current" | "dirty" | "clean" | "github";
+    icon: string;
+  }> = [];
   const isCurrent =
     normalizeComparablePath(currentWorkspace.value?.workingDir ?? null) ===
     normalizeComparablePath(workspace.workingDir);
 
   if (isCurrent) {
-    badges.push({ label: "Current", kind: "current" });
+    badges.push({ label: "Current workspace", kind: "current", icon: "pi pi-folder-open" });
   }
 
   if (workspace.state === WorkspaceState.WorkingTreeDirty) {
-    badges.push({ label: "Dirty", kind: "dirty" });
+    badges.push({ label: "Working tree has uncommitted changes", kind: "dirty", icon: "pi pi-pencil" });
   } else {
-    badges.push({ label: "Clean", kind: "clean" });
+    badges.push({ label: "Working tree clean", kind: "clean", icon: "pi pi-check-circle" });
   }
 
   if (workspace.gitRepoUrl) {
-    badges.push({ label: "GitHub", kind: "github" });
+    badges.push({ label: "Linked to GitHub", kind: "github", icon: "pi pi-github" });
   }
 
   return badges;
@@ -1407,6 +1411,23 @@ const handleCopyOpenCorUrl = async () => {
   }
 };
 
+const handleOpenWorkspaceRepositoryUrl = async (repoUrl: string) => {
+  if (!repoUrl) {
+    return;
+  }
+
+  try {
+    if (window.api?.ui?.openExternal) {
+      await window.api.ui.openExternal(repoUrl);
+      return;
+    }
+
+    window.open(repoUrl, "_blank", "noopener,noreferrer");
+  } catch (caughtError) {
+    error.value = caughtError instanceof Error ? caughtError.message : "Unable to open GitHub repository URL";
+  }
+};
+
 const handleMenuNewWorkspace = async () => {
   await handleCreateWorkspace(workspaceName.value || "My Workspace");
 };
@@ -2146,37 +2167,51 @@ watch(workspaceDescription, () => {
                 </div>
                 <ul v-else-if="workspaceLibraryPath" class="workspace-browser-list">
                   <li v-for="workspace in workspaceLibraryWorkspaces" :key="workspace.workingDir">
-                    <button
-                      type="button"
+                    <article
                       class="workspace-browser-item"
                       :class="{
                         'workspace-browser-item--active':
                           normalizeComparablePath(currentWorkspace?.workingDir ?? null) ===
                           normalizeComparablePath(workspace.workingDir),
                       }"
-                      :disabled="loading"
+                      role="button"
+                      tabindex="0"
+                      :aria-label="`Open workspace ${workspace.name}`"
                       @click="openWorkspaceByPath(workspace.workingDir)"
+                      @keydown.enter.prevent="openWorkspaceByPath(workspace.workingDir)"
+                      @keydown.space.prevent="openWorkspaceByPath(workspace.workingDir)"
                     >
                       <span class="workspace-browser-name-row">
                         <span class="workspace-browser-name">{{ workspace.name }}</span>
                         <span class="workspace-browser-badges">
                           <span
                             v-for="badge in workspaceStatusBadgesFor(workspace)"
-                            :key="`${workspace.workingDir}-${badge.label}`"
+                            :key="`${workspace.workingDir}-${badge.kind}`"
                             class="workspace-browser-badge"
                             :class="`workspace-browser-badge--${badge.kind}`"
+                            :title="badge.label"
+                            :aria-label="badge.label"
                           >
-                            {{ badge.label }}
+                            <i :class="[badge.icon, 'workspace-browser-badge-icon']" aria-hidden="true" />
                           </span>
                         </span>
                       </span>
                       <span class="workspace-browser-meta">
                         Branch: {{ workspace.gitBranch || "main" }}
                       </span>
-                      <span v-if="workspace.gitRepoUrl" class="workspace-browser-repo" :title="workspace.gitRepoUrl">
-                        {{ trimDisplayUrl(workspace.gitRepoUrl, 52) }}
-                      </span>
-                    </button>
+                      <button
+                        v-if="workspace.gitRepoUrl"
+                        type="button"
+                        class="workspace-browser-repo-link"
+                        :title="workspace.gitRepoUrl"
+                        @click.stop="handleOpenWorkspaceRepositoryUrl(workspace.gitRepoUrl)"
+                      >
+                        <span class="workspace-browser-repo">
+                          {{ trimDisplayUrl(workspace.gitRepoUrl, 52) }}
+                        </span>
+                        <i class="pi pi-external-link workspace-browser-repo-icon" aria-hidden="true" />
+                      </button>
+                    </article>
                   </li>
                 </ul>
               </div>
@@ -2796,15 +2831,10 @@ h1 {
   transition: border-color 0.18s ease, background-color 0.18s ease, transform 0.18s ease;
 }
 
-.workspace-browser-item:hover:not(:disabled) {
+.workspace-browser-item:hover {
   border-color: #1b6fd1;
   background: rgba(238, 245, 255, 0.96);
   transform: translateY(-1px);
-}
-
-.workspace-browser-item:disabled {
-  cursor: not-allowed;
-  opacity: 0.72;
 }
 
 .workspace-browser-item--active {
@@ -2815,32 +2845,41 @@ h1 {
 
 .workspace-browser-name-row {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
-  gap: 0.75rem;
+  gap: 0.5rem;
+  min-width: 0;
 }
 
 .workspace-browser-badges {
   display: inline-flex;
   gap: 0.35rem;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   justify-content: flex-end;
 }
 
 .workspace-browser-name {
+  flex: 1;
   font-weight: 700;
   color: #1f2d3d;
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .workspace-browser-badge {
   border-radius: 999px;
-  padding: 0.15rem 0.45rem;
+  width: 1.35rem;
+  height: 1.35rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   background: rgba(27, 111, 209, 0.15);
   color: #16539d;
+}
+
+.workspace-browser-badge-icon {
   font-size: 0.74rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
 }
 
 .workspace-browser-badge--current {
@@ -2873,6 +2912,36 @@ h1 {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.workspace-browser-repo-link {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.35rem;
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  padding: 0;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+}
+
+.workspace-browser-repo-link .workspace-browser-repo {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.workspace-browser-repo-link:hover .workspace-browser-repo {
+  color: #16539d;
+  text-decoration: underline;
+}
+
+.workspace-browser-repo-icon {
+  font-size: 0.78rem;
+  color: #4f647e;
 }
 
 .field-grid {
