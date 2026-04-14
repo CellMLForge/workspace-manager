@@ -18,7 +18,7 @@ import "./ipc-handlers";
 
 let mainWindow: BrowserWindow | null = null;
 const isDev = !app.isPackaged;
-const REPO_URL = "https://github.com/nickerso/cellmlforge-workspace-manager";
+const REPO_URL = "https://github.com/CellMLForge/workspace-manager";
 const NEW_ISSUE_URL = `${REPO_URL}/issues/new/choose`;
 
 const buildApplicationMenu = () => {

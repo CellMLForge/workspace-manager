@@ -243,7 +243,7 @@ scripts/
 
 Use Help -> Submit an Issue in the app, or open:
 
-- https://github.com/nickerso/cellmlforge-workspace-manager/issues/new/choose
+- https://github.com/CellMLForge/workspace-manager/issues/new/choose
 
 Include diagnostics copied from Help -> About -> Copy Diagnostics.
 
