@@ -1,0 +1,14 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+authors:
+- family-names: "Nickerson"
+  given-names: "David"
+  orcid: "https://orcid.org/0000-0003-4667-9779"
+title: "CellMLForge/workspace-manager"
+version: 0.4.1
+doi: 10.5281/zenodo.19536008
+date-released: 2026-04-16
+url: "https://github.com/CellMLForge/workspace-manager"
+contact:
+  - name: "CellMLForge/workspace-manager Issues"
+    url: "https://github.com/CellMLForge/workspace-manager/issues"
